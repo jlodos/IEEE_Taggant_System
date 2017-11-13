@@ -84,7 +84,9 @@
 
 #define IMAGE_SIZEOF_SHORT_NAME 8
 
+#define IMAGE_DIRECTORY_ENTRY_RESOURCE 2
 #define IMAGE_DIRECTORY_ENTRY_SECURITY 4
+#define IMAGE_DIRECTORY_ENTRY_COM_DESCRIPTOR 14
 
 
 #pragma pack(push,1)
@@ -255,6 +257,7 @@ typedef struct _PE_ALL_HEADERS {
         TAG_IMAGE_OPTIONAL_HEADER32 pe32;
         TAG_IMAGE_OPTIONAL_HEADER64 pe64;
     } oh;
+    UNSIGNED64 filesize;
 } PE_ALL_HEADERS,*PPE_ALL_HEADERS;
 
 /* checks file header if the file is correct PE file
@@ -273,6 +276,11 @@ int winpe_taggant_physical_offset(PTAGGANTCONTEXT pCtx, PFILEOBJECT fp, PE_ALL_H
 int winpe_is_pe64(PE_ALL_HEADERS* peh);
 
 int winpe_read_section_header(PTAGGANTCONTEXT pCtx, PFILEOBJECT fp, TAG_IMAGE_SECTION_HEADER *section);
+
 UNSIGNED32 winpe_raw_section_size(PE_ALL_HEADERS* peh, TAG_IMAGE_SECTION_HEADER* sec);
+
+UNSIGNED32 winpe_raw_section_offset(PE_ALL_HEADERS* peh, TAG_IMAGE_SECTION_HEADER* sec);
+
+int winpe_va_to_raw(PTAGGANTCONTEXT pCtx, PFILEOBJECT fp, PE_ALL_HEADERS* peh, UNSIGNED32 va, UNSIGNED64 *offset);
 
 #endif /* WINPE_HEADER */

@@ -59,9 +59,7 @@
  * ====================================================================
  */
 
-#include <iostream>
 #include <fstream>
-#include <istream>
 #include "taggant_types.h"
 
 using namespace std;

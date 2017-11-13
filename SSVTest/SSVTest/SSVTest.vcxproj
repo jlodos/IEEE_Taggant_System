@@ -79,6 +79,7 @@
       <Optimization>Disabled</Optimization>
       <PreprocessorDefinitions>SSV_LIBRARY;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
+      <AdditionalIncludeDirectories>..\..\TaggantLibrary\TaggantLibrary\src</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <AdditionalDependencies>libssv.lib;%(AdditionalDependencies)</AdditionalDependencies>
@@ -98,6 +99,7 @@
       <WarningLevel>Level1</WarningLevel>
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
       <PreprocessorDefinitions>SSV_LIBRARY;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>..\..\TaggantLibrary\TaggantLibrary\src</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <AdditionalDependencies>libssv.lib;%(AdditionalDependencies)</AdditionalDependencies>
@@ -119,6 +121,7 @@
     </PostBuildEvent>
     <ClCompile>
       <PreprocessorDefinitions>SSV_LIBRARY;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>..\..\TaggantLibrary\TaggantLibrary\src</AdditionalIncludeDirectories>
     </ClCompile>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
@@ -135,23 +138,15 @@
     </PostBuildEvent>
     <ClCompile>
       <PreprocessorDefinitions>SSV_LIBRARY;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>..\..\TaggantLibrary\TaggantLibrary\src</AdditionalIncludeDirectories>
     </ClCompile>
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="fileio.cpp" />
-    <ClCompile Include="filelist.cpp" />
     <ClCompile Include="main.cpp" />
-    <ClCompile Include="miscellaneous.cpp" />
-    <ClCompile Include="winpe.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="fileio.h" />
-    <ClInclude Include="filelist.h" />
-    <ClInclude Include="miscellaneous.h" />
-    <ClInclude Include="taggantlib.h" />
-    <ClInclude Include="taggant_types.h" />
-    <ClInclude Include="winpe.h" />
-    <ClInclude Include="winpe_types.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

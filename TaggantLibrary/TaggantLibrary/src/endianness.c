@@ -265,6 +265,29 @@ UNSIGNED16 UNSIGNED16_to_big_endian(char* buffer)
     return ((UNSIGNED16)buffer[1] << 8) + buffer[0];
 }
 
+UNSIGNED64 UNSIGNED64_from_little_endian(char* buffer)
+{
+    int i;
+    UNSIGNED64 res = buffer[0];
+
+    for (i = 1; i < 8; i++)
+    {
+        res = res << 8;
+        res += buffer[i];
+    }
+    return res;
+}
+
+UNSIGNED32 UNSIGNED32_from_little_endian(char* buffer)
+{
+    return ((UNSIGNED32)buffer[0] << 0x18) + ((UNSIGNED32)buffer[1] << 0x10) + ((UNSIGNED32)buffer[2] << 8) + buffer[3];
+}
+
+UNSIGNED16 UNSIGNED16_from_little_endian(char* buffer)
+{
+    return ((UNSIGNED16)buffer[0] << 8) + buffer[1];
+}
+
 void PACKERINFO_to_big_endian(PPACKERINFO in_packer_info, PPACKERINFO out_packer_info)
 {
     out_packer_info->PackerId = UNSIGNED32_to_big_endian((char*)&in_packer_info->PackerId);
@@ -302,7 +325,6 @@ void HASHBLOB_EXTENDED_to_big_endian(PHASHBLOB_EXTENDED in_hash_blob_extended, P
 
 void HASHBLOB_FULLFILE_to_big_endian(PHASHBLOB_FULLFILE in_hash_blob_full_file, PHASHBLOB_FULLFILE out_hash_blob_full_file)
 {
-
     HASHBLOB_DEFAULT_to_big_endian(&in_hash_blob_full_file->DefaultHash, &out_hash_blob_full_file->DefaultHash);
     HASHBLOB_EXTENDED_to_big_endian(&in_hash_blob_full_file->ExtendedHash, &out_hash_blob_full_file->ExtendedHash);
 }

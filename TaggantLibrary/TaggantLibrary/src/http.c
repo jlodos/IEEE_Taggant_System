@@ -59,13 +59,13 @@
  * ====================================================================
  */
 
-#ifdef SPV_LIBRARY
-
 #include "global.h"
 #include <stdio.h>
 #include <string.h>
 
-#ifdef WIN32
+#ifdef SPV_LIBRARY
+
+#ifdef _WIN32
     #include <winsock2.h>
 #else
     #include <sys/socket.h>
@@ -78,7 +78,7 @@
     #include <unistd.h>
 #endif
 
-#ifdef WIN32
+#ifdef _WIN32
 #	define SOCKET_DESCRIPTOR SOCKET
 #else
 #	define SOCKET_DESCRIPTOR int
@@ -112,15 +112,18 @@ int http_read(const char *hostName, const void *requestString, int requestLength
 
     char *r_start, *r_end;
 
-#ifdef WIN32
+#ifdef _WIN32
     WSADATA wsaData;
-    WSAStartup(MAKEWORD(2, 2), &wsaData);
+    if (WSAStartup(MAKEWORD(2, 2), &wsaData))
+    {
+        return HTTP_SOCKET_ERROR;
+    }
 #endif
 
     socketDescriptor = socket(AF_INET, SOCK_STREAM, 0);
     if (socketDescriptor == INVALID_SOCKET)
     {
-#ifdef WIN32
+#ifdef _WIN32
         WSACleanup();
 #endif
         return HTTP_SOCKET_ERROR;
@@ -185,7 +188,7 @@ int http_read(const char *hostName, const void *requestString, int requestLength
 
         buffer = tmpbuf;
 
-#ifdef WIN32
+#ifdef _WIN32
         readCount = recv(socketDescriptor, buffer + bytes_read, HTTP_READ_BUFFER_SIZE, 0);
 #else
         readCount = read(socketDescriptor, buffer + bytes_read, HTTP_READ_BUFFER_SIZE);
@@ -308,7 +311,7 @@ int safe_send(SOCKET_DESCRIPTOR socketDescriptor, const void *buffer, int length
     while(sentCount < length)
     {
         int tempResult;
-#ifdef WIN32
+#ifdef _WIN32
         tempResult = send(socketDescriptor, (const char*)point, length - sentCount, flag);
         if(tempResult == SOCKET_ERROR || tempResult == 0)
         {
@@ -330,7 +333,7 @@ int safe_send(SOCKET_DESCRIPTOR socketDescriptor, const void *buffer, int length
 
 void close_socket(SOCKET_DESCRIPTOR socketDescriptor)
 {
-#ifdef WIN32
+#ifdef _WIN32
     closesocket(socketDescriptor);
     WSACleanup();
 #else

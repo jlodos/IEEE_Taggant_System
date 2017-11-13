@@ -69,6 +69,7 @@
 /* Variables for taggant version */
 #define TAGGANT_LIBRARY_VERSION1 1
 #define TAGGANT_LIBRARY_VERSION2 2
+#define TAGGANT_LIBRARY_VERSION3 3
 
 /* TAGGANT_MINIMUM_SIZE should be greater than sum of sizeof(TAGGANT_HEADER) and sizeof(TAGGANT_FOOTER) 
  * Applied to taggant library version 1 only	
@@ -102,7 +103,8 @@ typedef enum
     TAGGANT_PEFILE = 0,
     TAGGANT_JSFILE = 1,
     TAGGANT_BINFILE = 2,
-    TAGGANT_TXTFILE = 3
+    TAGGANT_TXTFILE = 3,
+    TAGGANT_PESEALFILE = 4
 } TAGGANTCONTAINER;
 
 typedef enum
@@ -116,7 +118,8 @@ typedef enum
        this data is being appended to the taggant blob - extrablob field */
     ECONTRIBUTORLIST = 0x8000,
     ETAGPREV = 0x8001,
-    EIGNOREHMH = 0x8002
+    EIGNOREHMH = 0x8002,
+    ESEALINFO = 0x8003
 } ENUMTAGINFO;
 
 #ifdef _WIN32
@@ -195,6 +198,7 @@ typedef struct
 #define TINSUFFICIENTBUFFER 22
 #define TNOTIMPLEMENTED 23
 #define TNOTFOUND 24
+#define TINVALIDJSONFILE 25
 
 
 #endif /* COMMON_TYPES_HEADER */

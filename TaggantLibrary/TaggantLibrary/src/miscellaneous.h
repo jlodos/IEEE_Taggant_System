@@ -81,4 +81,6 @@ int file_read_textual_UNSIGNED32(PTAGGANTCONTEXT pCtx, PFILEOBJECT fp, UNSIGNED3
 
 int file_read_textual_buffer(PTAGGANTCONTEXT pCtx, PFILEOBJECT fp, PVOID buffer, UNSIGNED16 length);
 
+int convert_utf16_to_utf8(unsigned short** sourceStart, unsigned char** targetStart, unsigned char* targetEnd);
+
 #endif /* MISCELLANEOUS_H_ */

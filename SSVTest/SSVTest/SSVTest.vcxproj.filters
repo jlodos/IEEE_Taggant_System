@@ -1,0 +1,15 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <ClCompile Include="fileio.cpp" />
+    <ClCompile Include="main.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="fileio.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="TaggantLibrary">
+      <UniqueIdentifier>{6db9d2ba-df04-4884-82e6-422e447c3cbb}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

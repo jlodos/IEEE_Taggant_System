@@ -73,6 +73,7 @@
 #include "types.h"
 #include "taggant.h"
 #include "taggant2.h"
+#include "taggant3.h"
 #include "miscellaneous.h"
 #include "endianness.h"
 
@@ -85,7 +86,7 @@
 #include <openssl/x509_vfy.h>
 
 /* Current version of the library */
-#define TAGGANT_LIBRARY_CURRENTVERSION TAGGANT_LIBRARY_VERSION2
+#define TAGGANT_LIBRARY_CURRENTVERSION TAGGANT_LIBRARY_VERSION3
 
 /* global variable determines if the library is initialized */
 int lib_initialized = 0;
@@ -161,6 +162,8 @@ EXPORT UNSIGNED32 STDCALL TaggantAddHashRegion(__inout PTAGGANTOBJ pTaggantObj, 
     case TAGGANT_LIBRARY_VERSION2:
         res = taggant2_add_hash_region(pTaggantObj->tagObj2, uOffset, uLength);
         break;
+    case TAGGANT_LIBRARY_VERSION3:
+        break; /* no hash map for TAGGANT_PESEALFILE */
     }
 
     return res;
@@ -185,7 +188,7 @@ EXPORT void STDCALL TaggantFreeTaggant(__deref PTAGGANT pTaggant)
 
 EXPORT UNSIGNED32 STDCALL TaggantGetTaggant(__in PTAGGANTCONTEXT pCtx, __in PFILEOBJECT hFile, TAGGANTCONTAINER eContainer, __inout PTAGGANT *pTaggant)
 {
-    UNSIGNED32 res = TNOERR;
+    UNSIGNED32 res = TNOERR, v1res = TNOERR;
     PTAGGANT taggant;
     /* the current file position to check for a next taggant */
     UNSIGNED64 fileend;
@@ -195,13 +198,15 @@ EXPORT UNSIGNED32 STDCALL TaggantGetTaggant(__in PTAGGANTCONTEXT pCtx, __in PFIL
     PE_ALL_HEADERS peh;
     UNSIGNED32 ds_offset, ds_size;
     PTAGGANT2 taggant2;
-    int err, stoploop = 0;
+    int i, err, stoploop = 0;
+    char buf[7];
 
     if (!lib_initialized)
     {
         return TLIBNOTINIT;
     }
 
+    peh.filesize = 0; /* mark uninitialized */
     taggant = *pTaggant;
     /* create the taggant if it is empty */
     if (!taggant)
@@ -210,7 +215,11 @@ EXPORT UNSIGNED32 STDCALL TaggantGetTaggant(__in PTAGGANTCONTEXT pCtx, __in PFIL
         if (taggant)
         {
             memset(taggant, 0, sizeof(TAGGANT));
-            taggant->uVersion = TAGGANT_LIBRARY_CURRENTVERSION;
+#ifdef SSV_SEAL_LIBRARY
+            taggant->uVersion = (eContainer == TAGGANT_PESEALFILE) ? TAGGANT_LIBRARY_VERSION3 : TAGGANT_LIBRARY_VERSION2;
+#else
+            taggant->uVersion = TAGGANT_LIBRARY_VERSION2;
+#endif
             taggant->tagganttype = eContainer;
         }
         else
@@ -226,7 +235,11 @@ EXPORT UNSIGNED32 STDCALL TaggantGetTaggant(__in PTAGGANTCONTEXT pCtx, __in PFIL
 
     if (res == TNOERR)
     {
+#ifdef SSV_SEAL_LIBRARY
+        if (taggant->uVersion == TAGGANT_LIBRARY_VERSION2 || taggant->uVersion == TAGGANT_LIBRARY_VERSION3)
+#else
         if (taggant->uVersion == TAGGANT_LIBRARY_VERSION2)
+#endif
         {
             switch (eContainer)
             {
@@ -267,12 +280,14 @@ EXPORT UNSIGNED32 STDCALL TaggantGetTaggant(__in PTAGGANTCONTEXT pCtx, __in PFIL
                 break;
             }
             case TAGGANT_PEFILE:
+#ifdef SSV_SEAL_LIBRARY
+            case TAGGANT_PESEALFILE:
+#endif
             {
                 /* Assume it is PE file and make sure it is correct
                 * If taggant2 points to existing object then PE file had been already verified
                 * do not verify it again to save the time
                 */
-                err = 0;
                 if (taggant->pTag2)
                 {
                     fileend = taggant->pTag2->fileend;
@@ -280,54 +295,79 @@ EXPORT UNSIGNED32 STDCALL TaggantGetTaggant(__in PTAGGANTCONTEXT pCtx, __in PFIL
                     /* Free the taggant object */
                     taggant2_free_taggant(taggant->pTag2);
                     taggant->pTag2 = NULL;
+                    err = 0;
                 }
                 else
                 {
-                    fileend = get_file_size(pCtx, hFile);
                     err = winpe_is_correct_pe_file(pCtx, hFile, &peh) ? 0 : 1;
                     if (!err)
                     {
+                        /* PE file */
+                        fileend = peh.filesize;
+                        ffhend = fileend;
                         /* exclude digital signature */
                         if (winpe_is_pe64(&peh))
                         {
-                            ds_offset = (UNSIGNED32)peh.oh.pe64.DataDirectory[IMAGE_DIRECTORY_ENTRY_SECURITY].VirtualAddress;
-                            ds_size = (UNSIGNED32)peh.oh.pe64.DataDirectory[IMAGE_DIRECTORY_ENTRY_SECURITY].Size;
+                            ds_offset = peh.oh.pe64.DataDirectory[IMAGE_DIRECTORY_ENTRY_SECURITY].VirtualAddress;
+                            ds_size = peh.oh.pe64.DataDirectory[IMAGE_DIRECTORY_ENTRY_SECURITY].Size;
                         }
                         else
                         {
-                            ds_offset = (UNSIGNED32)peh.oh.pe32.DataDirectory[IMAGE_DIRECTORY_ENTRY_SECURITY].VirtualAddress;
-                            ds_size = (UNSIGNED32)peh.oh.pe32.DataDirectory[IMAGE_DIRECTORY_ENTRY_SECURITY].Size;
+                            ds_offset = peh.oh.pe32.DataDirectory[IMAGE_DIRECTORY_ENTRY_SECURITY].VirtualAddress;
+                            ds_size = peh.oh.pe32.DataDirectory[IMAGE_DIRECTORY_ENTRY_SECURITY].Size;
                         }
                         if (ds_offset != 0 && ds_size != 0)
                         {
                             if ((ds_offset + ds_size) == fileend)
                             {
                                 fileend -= ds_size;
+                                /* check padding to 8 byte boundary as per PE/COFF specification */
+                                if (file_seek(pCtx, hFile, fileend - sizeof(buf), SEEK_SET) && file_read_buffer(pCtx, hFile, buf, sizeof(buf)))
+                                {
+                                    for (i = sizeof(buf) - 1; i >= 0 && !buf[i]; i--)
+                                    {
+                                        --fileend;
+                                    }
+                                }
+                                ffhend = fileend;
                             }
                         }
-                        ffhend = fileend;
-                        while (taggant2_read_binary(pCtx, hFile, ffhend, &taggant2, TAGGANT_PEFILE) == TNOERR)
+                        while (
+                            taggant2_read_binary(pCtx, hFile, ffhend, &taggant2, TAGGANT_PESEALFILE) == TNOERR ||
+                            taggant2_read_binary(pCtx, hFile, ffhend, &taggant2, TAGGANT_PEFILE) == TNOERR
+                            )
                         {
                             ffhend -= taggant2->Header.TaggantLength;
                             /* Free the taggant object */
                             taggant2_free_taggant(taggant2);
                         }
                     }
+                    else
+                    {
+                        /* Assume a stand alone taggant file */
+                        fileend = get_file_size(pCtx, hFile);
+                        ffhend = fileend;
+                        if (taggant2_read_binary(pCtx, hFile, fileend, &taggant2, TAGGANT_PESEALFILE) == TNOERR)
+                        {
+                            ffhend -= taggant2->Header.TaggantLength;
+                            taggant2_free_taggant(taggant2);
+                            err = 0;
+                        }
+                    }
                 }
                 if (!err)
                 {
-                    res = taggant2_read_binary(pCtx, hFile, fileend, &taggant->pTag2, TAGGANT_PEFILE);
+                    res = taggant2_read_binary(pCtx, hFile, fileend, &taggant->pTag2, eContainer);
                     if (res == TNOERR)
                     {
                         taggant->pTag2->fileend = fileend - taggant->pTag2->Header.TaggantLength;
                         taggant->pTag2->ffhend = ffhend;
                     }
-                    else
-                        if (res == TNOTAGGANTS)
-                        {
-                            /* try to read taggant v1 */
-                            taggant->uVersion = TAGGANT_LIBRARY_VERSION1;
-                        }
+                    else if (res == TNOTAGGANTS)
+                    {
+                        /* try to read taggant v1 */
+                        taggant->uVersion = TAGGANT_LIBRARY_VERSION1;
+                    }
                 }
                 else
                 {
@@ -402,18 +442,28 @@ EXPORT UNSIGNED32 STDCALL TaggantGetTaggant(__in PTAGGANTCONTEXT pCtx, __in PFIL
             }
             }
         }
-        else
-            if(taggant->uVersion == TAGGANT_LIBRARY_VERSION1 && !stoploop)
-            {
-                /* if we already processed taggant v1 then stop the enumeration */
-                res = TNOTAGGANTS;
-                stoploop = 1;
-            }
+        else if (taggant->uVersion == TAGGANT_LIBRARY_VERSION1)
+        {
+            /* if we already processed taggant v1 then stop the enumeration */
+            res = TNOTAGGANTS;
+            stoploop = 1;
+        }
         if (taggant->uVersion == TAGGANT_LIBRARY_VERSION1 && !stoploop)
         {
+            /* the original taggant->uVersion was modified to try to read a v1 taggant */
             if (eContainer == TAGGANT_PEFILE)
             {
-                res = taggant_read_binary(pCtx, hFile, &taggant->pTag1);
+                /* initialize the headers if needed  */
+                err = peh.filesize ? 0 : !winpe_is_correct_pe_file(pCtx, hFile, &peh);
+                if (!err)
+                {
+                    /* keep the original error if v1 fails */
+                    v1res = taggant_read_from_pe(pCtx, hFile, &peh, &taggant->pTag1);
+                    if (v1res == TNOERR)
+                    {
+                        res = v1res;
+                    }
+                }
             }
             else
             {
@@ -443,6 +493,9 @@ EXPORT UNSIGNED32 STDCALL TaggantValidateSignature(__in PTAGGANTOBJ pTaggantObj,
         res = taggant_validate_signature(pTaggantObj->tagObj1, pTaggant->pTag1, pRootCert);
         break;
     case TAGGANT_LIBRARY_VERSION2:
+#ifdef SSV_SEAL_LIBRARY
+    case TAGGANT_LIBRARY_VERSION3:
+#endif
         res = taggant2_validate_signature(pTaggantObj->tagObj2, pTaggant->pTag2, pRootCert);
         break;
     }
@@ -452,7 +505,6 @@ EXPORT UNSIGNED32 STDCALL TaggantValidateSignature(__in PTAGGANTOBJ pTaggantObj,
 
 #endif
 
-
 #ifdef SPV_LIBRARY
 
 EXPORT UNSIGNED32 STDCALL TaggantComputeHashes(__in PTAGGANTCONTEXT pCtx, __inout PTAGGANTOBJ pTaggantObj, __in PFILEOBJECT hFile,
@@ -460,12 +512,16 @@ EXPORT UNSIGNED32 STDCALL TaggantComputeHashes(__in PTAGGANTCONTEXT pCtx, __inou
 {
     PE_ALL_HEADERS peh;
     UNSIGNED32 res = TINVALIDPEFILE;
-    UNSIGNED64 objectend, fileend = uFileEnd;
+    UNSIGNED64 objectend = uObjectEnd, fileend = uFileEnd;
     PTAGGANT1 taggant1 = NULL;
     PTAGGANT2 taggant2 = NULL;
     int found = 0;
     EVP_MD_CTX evp;
-    UNSIGNED8 prevtag;
+    UNSIGNED8 prevtag = 0;
+#ifdef SPV_SEAL_LIBRARY
+    char* sealinfo;
+    size_t sealinfosize;
+#endif
 
     if (!lib_initialized)
     {
@@ -478,8 +534,13 @@ EXPORT UNSIGNED32 STDCALL TaggantComputeHashes(__in PTAGGANTCONTEXT pCtx, __inou
         /* Check if the file is correct win_pe file */
         if (winpe_is_correct_pe_file(pCtx, hFile, &peh))
         {
+            /* calculate the object end if needed */
+            if (objectend == 0)
+            {
+                objectend = winpe2_object_end(pCtx, hFile, &peh);
+            }
             /* Compute default hash */
-            res = taggant_compute_default_hash(pCtx, &pTaggantObj->tagObj1->pTagBlob->Hash.FullFile, hFile, &peh, uObjectEnd, fileend, uTaggantSize);
+            res = taggant_compute_default_hash(pCtx, &pTaggantObj->tagObj1->pTagBlob->Hash.FullFile, hFile, &peh, objectend, fileend, uTaggantSize);
             if (res == TNOERR && pTaggantObj->tagObj1->pTagBlob->Hash.Hashmap.Entries > 0)
             {
                 /* Compute hashmap */
@@ -578,14 +639,17 @@ EXPORT UNSIGNED32 STDCALL TaggantComputeHashes(__in PTAGGANTCONTEXT pCtx, __inou
             if (winpe_is_correct_pe_file(pCtx, hFile, &peh))
             {
                 /* Get the object end of PE file */
-                objectend = winpe2_object_end(pCtx, hFile, &peh);
+                if (!objectend)
+                {
+                    objectend = winpe2_object_end(pCtx, hFile, &peh);
+                }
                 /* Get the file end excluding existing taggants
                 * Walk through all taggants in file and take offset of the file without taggants
                 * Take offset and size of the latest taggant to include it into hash map
                 */
                 if (!fileend)
                 {
-                    fileend = get_file_size(pCtx, hFile);
+                    fileend = peh.filesize;
                 }
                 res = TNOERR;
                 found = 0;
@@ -614,11 +678,12 @@ EXPORT UNSIGNED32 STDCALL TaggantComputeHashes(__in PTAGGANTCONTEXT pCtx, __inou
                     /* if taggant v2 is not found, try to find taggant v1 to add it to hashmap */
                     if (!found)
                     {
-                        if (taggant_read_binary(pCtx, hFile, &taggant1) == TNOERR)
+                        if (taggant_read_from_pe(pCtx, hFile, &peh, &taggant1) == TNOERR)
                         {
                             /* remember that there is a previous taggant in the file */
                             prevtag = 1;
-                            if ((res = taggant2_put_extrainfo(&pTaggantObj->tagObj2->tagBlob.Extrablob, ETAGPREV, sizeof(prevtag), (char*)&prevtag)) == TNOERR)
+                            res = taggant2_put_extrainfo(&pTaggantObj->tagObj2->tagBlob.Extrablob, ETAGPREV, sizeof(prevtag), (char*)&prevtag);
+                            if (res == TNOERR)
                             {
                                 /* add a hash region of the previous taggant */
                                 if ((res = taggant2_add_hash_region(pTaggantObj->tagObj2, taggant1->offset, (UNSIGNED64)taggant1->Header.TaggantLength)) == TNOERR)
@@ -633,7 +698,7 @@ EXPORT UNSIGNED32 STDCALL TaggantComputeHashes(__in PTAGGANTCONTEXT pCtx, __inou
                     if (res == TNOERR)
                     {
                         /* compute file hashes */
-                        if (fileend >= uObjectEnd)
+                        if (fileend >= objectend)
                         {
                             /* Compute hash */
                             EVP_MD_CTX_init(&evp);
@@ -711,6 +776,42 @@ EXPORT UNSIGNED32 STDCALL TaggantComputeHashes(__in PTAGGANTCONTEXT pCtx, __inou
         }
         }
         break;
+#ifdef SPV_SEAL_LIBRARY
+    case TAGGANT_LIBRARY_VERSION3:
+        switch (pTaggantObj->tagObj2->tagganttype)
+        {
+        case TAGGANT_PESEALFILE:
+        {
+            /* Get the file end, there are no taggants in the seal */
+            if (!fileend)
+            {
+                fileend = get_file_size(pCtx, hFile);
+            }
+            res = taggant2_compute_hash_raw(pCtx, &pTaggantObj->tagObj2->tagBlob.Hash, hFile, fileend, pTaggantObj->tagObj2->tagBlob.pHashMapDoubles);
+            if (res == TNOERR)
+            {
+                /* add seal info */
+                sealinfo = taggant3_get_seal_info(pCtx, hFile);
+                if (sealinfo)
+                {
+                    sealinfosize = strlen(sealinfo);
+                    res = taggant2_put_extrainfo(&pTaggantObj->tagObj2->tagBlob.Extrablob, ESEALINFO, sealinfosize, sealinfo);
+                    memory_free(sealinfo);
+                }
+                else
+                {
+                    res = TINVALIDJSONFILE;
+                }
+            }
+            break;
+        }
+        default:
+        {
+            res = TTYPE;
+        }
+        }
+        break;
+#endif
     default:
         res = TNOTIMPLEMENTED;
         break;
@@ -734,6 +835,9 @@ EXPORT UNSIGNED32 STDCALL TaggantPutInfo(__inout PTAGGANTOBJ pTaggantObj, ENUMTA
         res = taggant_put_info(pTaggantObj->tagObj1, eKey, pSize, pInfo);
         break;
     case TAGGANT_LIBRARY_VERSION2:
+#ifdef SPV_SEAL_LIBRARY
+    case TAGGANT_LIBRARY_VERSION3:
+#endif
         res = taggant2_put_info(pTaggantObj->tagObj2, eKey, pSize, pInfo);
         break;
     }
@@ -760,6 +864,9 @@ EXPORT UNSIGNED32 STDCALL TaggantGetInfo(__in PTAGGANTOBJ pTaggantObj, ENUMTAGIN
         res = taggant_get_info(pTaggantObj->tagObj1, eKey, pSize, pInfo);
         break;
     case TAGGANT_LIBRARY_VERSION2:
+#ifdef SSV_SEAL_LIBRARY
+    case TAGGANT_LIBRARY_VERSION3:
+#endif
         res = taggant2_get_info(pTaggantObj->tagObj2, eKey, pSize, pInfo);
         break;
     }
@@ -791,6 +898,9 @@ EXPORT UNSIGNED32 STDCALL TaggantPrepare(__inout PTAGGANTOBJ pTaggantObj, __in c
         res = taggant_prepare(pTaggantObj->tagObj1, pLicense, pTaggantOut, uTaggantReservedSize);
         break;
     case TAGGANT_LIBRARY_VERSION2:
+#ifdef SPV_SEAL_LIBRARY
+    case TAGGANT_LIBRARY_VERSION3:
+#endif
         res = taggant2_prepare(pTaggantObj->tagObj2, pLicense, pTaggantObj->tagObj2->tagganttype, pTaggantOut, uTaggantReservedSize);
         break;
     }
@@ -821,6 +931,9 @@ EXPORT __success(return == TNOERR) UNSIGNED32 STDCALL TaggantGetTimestamp(__in P
         res = taggant_get_timestamp(pTaggantObj->tagObj1, pTime, pTSRootCert);
         break;
     case TAGGANT_LIBRARY_VERSION2:
+#ifdef SSV_SEAL_LIBRARY
+    case TAGGANT_LIBRARY_VERSION3:
+#endif
         res = taggant2_get_timestamp(pTaggantObj->tagObj2, pTime, pTSRootCert);
         break;
     }
@@ -847,6 +960,9 @@ EXPORT UNSIGNED32 STDCALL TaggantPutTimestamp(__inout PTAGGANTOBJ pTaggantObj, _
         res = taggant_put_timestamp(pTaggantObj->tagObj1, pTSUrl, uTimeout);
         break;
     case TAGGANT_LIBRARY_VERSION2:
+#ifdef SPV_SEAL_LIBRARY
+    case TAGGANT_LIBRARY_VERSION3:
+#endif
         res = taggant2_put_timestamp(pTaggantObj->tagObj2, pTSUrl, uTimeout);
         break;
     }
@@ -859,14 +975,18 @@ EXPORT UNSIGNED32 STDCALL TaggantPutTimestamp(__inout PTAGGANTOBJ pTaggantObj, _
 EXPORT PTAGGANTOBJ STDCALL TaggantObjectNew(__in_opt PTAGGANT pTaggant)
 {
     PTAGGANTOBJ pTaggantObj;
-    return TaggantObjectNewEx(pTaggant, TAGGANT_LIBRARY_CURRENTVERSION, TAGGANT_PEFILE, &pTaggantObj) == TNOERR ? pTaggantObj : NULL;
+    return TaggantObjectNewEx(pTaggant, TAGGANT_LIBRARY_VERSION2, TAGGANT_PEFILE, &pTaggantObj) == TNOERR ? pTaggantObj : NULL;
 }
-
 
 EXPORT __success(return == TNOERR) UNSIGNED32 STDCALL TaggantObjectNewEx(__in_opt PTAGGANT pTaggant, UNSIGNED64 uVersion, TAGGANTCONTAINER eTaggantType, __out PTAGGANTOBJ *pTaggantObj)
 {
 #ifdef SSV_LIBRARY
     PTAGGANT taggant = (PTAGGANT)pTaggant;
+    uVersion; /* avoid unreferenced formal parameter warning*/
+    eTaggantType; /* avoid unreferenced formal parameter warning*/
+#endif
+#ifdef SPV_LIBRARY
+    pTaggant; /* avoid unreferenced formal parameter warning*/
 #endif
     UNSIGNED32 res = TNOERR;
     PTAGGANTOBJ tagObj;
@@ -877,13 +997,16 @@ EXPORT __success(return == TNOERR) UNSIGNED32 STDCALL TaggantObjectNewEx(__in_op
         return TLIBNOTINIT;
     }
 #ifdef SSV_LIBRARY
-    ver = taggant->uVersion;
+    if (taggant)
+    {
+        ver = taggant->uVersion;
+    }
 #endif
 
 #ifdef SPV_LIBRARY
     /* accept version number for spv only, for ssv works as latest library version */
     ver = uVersion;
-    if (ver == TAGGANT_LIBRARY_VERSION1 && (eTaggantType == TAGGANT_JSFILE || eTaggantType == TAGGANT_TXTFILE || eTaggantType == TAGGANT_BINFILE))
+    if (ver == TAGGANT_LIBRARY_VERSION1 && eTaggantType != TAGGANT_PEFILE)
     {
         return TTYPE;
     }
@@ -912,9 +1035,19 @@ EXPORT __success(return == TNOERR) UNSIGNED32 STDCALL TaggantObjectNewEx(__in_op
 
                     /* Set the size of the taggant, required for SSV only */
 #ifdef SSV_LIBRARY
-                    tagObj->tagObj1->uTaggantSize = taggant->pTag1->Header.TaggantLength;
+                    if (taggant && taggant->pTag1)
+                    { 
+                        tagObj->tagObj1->uTaggantSize = taggant->pTag1->Header.TaggantLength;
+                        res = TNOERR;
+                    }
+                    else
+                    {
+                        res = TINVALIDTAGGANT;
+                    }
 #endif
+#ifdef SPV_LIBRARY
                     res = TNOERR;
+#endif
                 }
                 else
                 {
@@ -928,35 +1061,45 @@ EXPORT __success(return == TNOERR) UNSIGNED32 STDCALL TaggantObjectNewEx(__in_op
                 res = TMEMORY;
             }
         }
-        else
-            if (ver == TAGGANT_LIBRARY_VERSION2)
+#if defined(SPV_SEAL_LIBRARY) || defined(SSV_SEAL_LIBRARY)
+        else if (ver == TAGGANT_LIBRARY_VERSION2 || ver == TAGGANT_LIBRARY_VERSION3)
+#else
+        else if (ver == TAGGANT_LIBRARY_VERSION2)
+#endif
+        {
+            tagObj->tagObj2 = (PTAGGANTOBJ2)memory_alloc(sizeof(TAGGANTOBJ2));
+            if (tagObj->tagObj2)
             {
-                
-                tagObj->tagObj2 = (PTAGGANTOBJ2)memory_alloc(sizeof(TAGGANTOBJ2));
-                if (tagObj->tagObj2)
-                {
-                    memset(tagObj->tagObj2, 0, sizeof(TAGGANTOBJ2));
-                    /* Initialize taggant blob */
-                    tagObj->tagObj2->tagBlob.Header.Version = TAGGANTBLOB_VERSION2;
-                    /* Remember the fileend and taggant type values */
+                memset(tagObj->tagObj2, 0, sizeof(TAGGANTOBJ2));
+                /* Initialize taggant blob */
+                tagObj->tagObj2->tagBlob.Header.Version = TAGGANTBLOB_VERSION2;
+                /* Remember the fileend and taggant type values */
 #ifdef SSV_LIBRARY
+                if (taggant && taggant->pTag2)
+                {
                     tagObj->tagObj2->fileend = taggant->pTag2->fileend;
                     tagObj->tagObj2->tagganttype = taggant->pTag2->tagganttype;
-#endif
-#ifdef SPV_LIBRARY
-                    tagObj->tagObj2->tagganttype = eTaggantType;
-#endif
                     res = TNOERR;
                 }
                 else
                 {
-                    res = TMEMORY;
+                    res = TINVALIDTAGGANT;
                 }
+#endif
+#ifdef SPV_LIBRARY
+                tagObj->tagObj2->tagganttype = eTaggantType;
+                res = TNOERR;
+#endif
             }
             else
             {
-                res = TNOTIMPLEMENTED;
+                res = TMEMORY;
             }
+        }
+        else
+        {
+            res = TNOTIMPLEMENTED;
+        }
     }
     else
     {
@@ -1195,6 +1338,8 @@ EXPORT __success(return > 0) UNSIGNED16 STDCALL TaggantGetHashMapDoubles(__in PT
                 res = pTaggantObj->tagObj2->tagBlob.Hash.Hashmap.Entries;
             }
             break;
+        case TAGGANT_LIBRARY_VERSION3:
+            break; /* no hash map for TAGGANT_PESEALFILE */
         }
     }
 
@@ -1215,6 +1360,9 @@ EXPORT PPACKERINFO STDCALL TaggantPackerInfo(__in PTAGGANTOBJ pTaggantObj)
             res = &pTaggantObj->tagObj1->pTagBlob->Header.PackerInfo;
             break;
         case TAGGANT_LIBRARY_VERSION2:
+#if defined(SPV_SEAL_LIBRARY) || defined(SSV_SEAL_LIBRARY)
+        case TAGGANT_LIBRARY_VERSION3:
+#endif
             res = &pTaggantObj->tagObj2->tagBlob.Header.PackerInfo;
             break;
         }
@@ -1272,6 +1420,26 @@ EXPORT UNSIGNED32 STDCALL TaggantValidateDefaultHashes(__in PTAGGANTCONTEXT pCtx
         }
         }
         break;
+#ifdef SSV_SEAL_LIBRARY
+	case TAGGANT_LIBRARY_VERSION3:
+        if (!filend)
+        {
+            filend = pTaggantObj->tagParent->pTag2->ffhend;
+        }
+        switch (pTaggantObj->tagObj2->tagganttype)
+        {
+        case TAGGANT_PESEALFILE:
+        {
+            res = taggant3_validate_default_hashes_pe(pCtx, pTaggantObj->tagObj2, hFile);
+            break;
+        }
+        default:
+        {
+            res = TTYPE;
+        }
+        }
+        break;
+#endif
     }
 
     return res;
@@ -1294,6 +1462,11 @@ EXPORT UNSIGNED32 STDCALL TaggantValidateHashMap(__in PTAGGANTCONTEXT pCtx, __in
     case TAGGANT_LIBRARY_VERSION2:
         res = taggant2_validate_hashmap(pCtx, pTaggantObj->tagObj2, hFile);
         break;
+#ifdef SSV_SEAL_LIBRARY
+    case TAGGANT_LIBRARY_VERSION3:
+        res = TERROR; /* no hash map for TAGGANT_PESEALFILE */
+        break;
+#endif
     }
 
     return res;

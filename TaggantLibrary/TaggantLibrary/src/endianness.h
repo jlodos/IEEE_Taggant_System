@@ -70,6 +70,7 @@ static int tmp_endianness = 1;
 
 void UNSIGNED16_to_little_endian(UNSIGNED16 value, char* buffer);
 void UNSIGNED32_to_little_endian(UNSIGNED32 value, char* buffer);
+void UNSIGNED64_to_little_endian(UNSIGNED64 value, char* buffer);
 
 void TAGGANTBLOB_to_little_endian(PTAGGANTBLOB in_tag_blob, PTAGGANTBLOB out_tag_blob);
 void TAGGANT_to_little_endian(PTAGGANT1 in_tag, PTAGGANT1 out_tag);
@@ -93,6 +94,10 @@ void TAGGANTBLOB_HEADER_to_big_endian(PTAGGANTBLOB_HEADER in_tag_blob_header, PT
 UNSIGNED16 UNSIGNED16_to_big_endian(char* buffer);
 UNSIGNED32 UNSIGNED32_to_big_endian(char* buffer);
 UNSIGNED64 UNSIGNED64_to_big_endian(char* buffer);
+
+UNSIGNED16 UNSIGNED16_from_little_endian(char* buffer);
+UNSIGNED32 UNSIGNED32_from_little_endian(char* buffer);
+UNSIGNED64 UNSIGNED64_from_little_endian(char* buffer);
 
 void HASHBLOB_HASHMAP_DOUBLE_to_little_endian(PHASHBLOB_HASHMAP_DOUBLE in_hash_blob_hash_map_double, PHASHBLOB_HASHMAP_DOUBLE out_hash_blob_hash_map_double);
 

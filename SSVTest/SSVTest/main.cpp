@@ -81,10 +81,7 @@
 
 #include <time.h>
 #include "fileio.h"
-#include "winpe.h"
 #include "taggantlib.h"
-#include "taggant_types.h"
-#include "miscellaneous.h"
 
 using namespace std;
 
@@ -152,16 +149,16 @@ int main(int argc, char *argv[])
 		// Initialize taggant library
 		TAGGANTFUNCTIONS funcs;
 		memset(&funcs, 0, sizeof(TAGGANTFUNCTIONS));
-		UNSIGNED64 uVersion = TAGGANT_LIBRARY_VERSION2;
+		UNSIGNED64 uVersion = TAGGANT_LIBRARY_VERSION3;
 		// Set structure size
 		funcs.size = sizeof(TAGGANTFUNCTIONS);
 		TaggantInitializeLibrary(&funcs, &uVersion);
 
     	cout << "Taggant Library version " << uVersion << "\n";
-    	// Make sure the taggant library supports version 2
-    	if (uVersion < TAGGANT_LIBRARY_VERSION2)
+		// Make sure the taggant library supports version 3
+		if (uVersion < TAGGANT_LIBRARY_VERSION3)
     	{
-    		cout << "Current taggant library does not support version 2\n\n";
+			cout << "Current taggant library does not support version 3\n\n";
     		err = 1;
     	}
     	if (!err)
@@ -177,7 +174,7 @@ int main(int argc, char *argv[])
 				pCtx->FileTellCallBack = (UNSIGNED64 (__DECLARATION *)(void*))fileio_ftell;
 			
 				// Load CA certificate to the memory
-				ifstream fca(argv[1], ios::binary);
+				fca.open(argv[1], ios::binary);
 				fca.seekg(0, ios::end);
 				long fsize = fca.tellg();
 				char* cacert = new char[fsize + 1];
@@ -187,7 +184,7 @@ int main(int argc, char *argv[])
 				fca.clear();
 			
 				// Load TS certificate to the memory
-				ifstream fts(argv[2], ios::binary);
+				fts.open(argv[2], ios::binary);
 				fts.seekg(0, ios::end);
 				long ftssize = fts.tellg();
 				char* tscert = new char[ftssize + 1];
@@ -232,7 +229,7 @@ int main(int argc, char *argv[])
 	return err;
 }
 
-void print_tag_info(PTAGGANTOBJ tag_obj, ENUMTAGINFO eKey)
+void print_tag_info(__in PTAGGANTOBJ tag_obj, ENUMTAGINFO eKey)
 {	
 	unsigned int tag_info_size = 0;
 	// Get the length of the eKey taggant information
@@ -368,7 +365,7 @@ void seek_dir(PTAGGANTCONTEXT pCtx, char* cacert, char* tscert, string path)
 
 #endif
 
-void process_taggant(PTAGGANTCONTEXT pCtx, ifstream *pfin, PPE_ALL_HEADERS ppeh, PTAGGANT pTaggant, char* cacert, char* tscert)
+void process_taggant(PTAGGANTCONTEXT pCtx, ifstream *pfin, PTAGGANT pTaggant, char* cacert, char* tscert)
 {
     cout << " - taggant is found\n";
     // Initialize taggant object before it will be validated
@@ -408,7 +405,7 @@ void process_taggant(PTAGGANTCONTEXT pCtx, ifstream *pfin, PPE_ALL_HEADERS ppeh,
             }
 
             // print contributors info					
-            UNSIGNED32 csize;
+            UNSIGNED32 csize = 0;
             if ((res = TaggantGetInfo(tag_obj, ECONTRIBUTORLIST, &csize, NULL)) == TINSUFFICIENTBUFFER)
             {
                 cout << " - found contributors information of " << csize << " bytes length\n";
@@ -496,10 +493,9 @@ void process_taggant(PTAGGANTCONTEXT pCtx, ifstream *pfin, PPE_ALL_HEADERS ppeh,
                     {
                         file_end = fileio_fsize(pfin);
                     }
-                    int object_end = winpe_object_size(pfin, ppeh);
 
                     // Compute default hashes of the current file
-                    res = TaggantValidateDefaultHashes(pCtx, tag_obj, (void*)pfin, object_end, file_end);
+                    res = TaggantValidateDefaultHashes(pCtx, tag_obj, (void*)pfin, 0, file_end);
                     // Check if file hash is valid
                     if (res == TNOERR)
                     {
@@ -542,53 +538,56 @@ void process_taggant(PTAGGANTCONTEXT pCtx, ifstream *pfin, PPE_ALL_HEADERS ppeh,
 
 void check_file(PTAGGANTCONTEXT pCtx, char* cacert, char* tscert, string fileName)
 {
-	// Try to open the file
-	ifstream fin(fileName.c_str(), ios::binary);
-	if (fin.is_open())
-	{
-		cout << "" + fileName + "\n";
+    // Try to open the file
+    ifstream fin(fileName.c_str(), ios::binary);
+    if (fin.is_open())
+    {
+        cout << "" + fileName + "\n";
 
-		PE_ALL_HEADERS peh;
-
-        void *taggant = NULL;
+        PTAGGANT taggant = NULL;
         UNSIGNED32 res = TNOTAGGANTS;
         TAGGANTCONTAINER filetype = TAGGANT_PEFILE;
-		// Make sure the file is correct PE file
-        if (winpe_is_correct_pe_file(&fin, &peh))
+        cout << " - check against PE file\n";
+        filetype = TAGGANT_PEFILE;
+        res = TaggantGetTaggant(pCtx, (void*)&fin, filetype, &taggant);
+        if (res != TNOERR)
         {
-            cout << " - check against PE file\n";
-            filetype = TAGGANT_PEFILE;
-            res = TaggantGetTaggant(pCtx, (void*)&fin, filetype, &taggant);
-        }
-        else
-        {
-            cout << " - check against JS file\n";
-            filetype = TAGGANT_JSFILE;
+            TaggantFreeTaggant(taggant);
+            taggant = NULL;
+            filetype = TAGGANT_PESEALFILE;
             res = TaggantGetTaggant(pCtx, (void*)&fin, filetype, &taggant);
             if (res != TNOERR)
             {
                 TaggantFreeTaggant(taggant);
                 taggant = NULL;
-                cout << " - check against TXT file\n";
-                filetype = TAGGANT_TXTFILE;
+                cout << " - check against JS file\n";
+                filetype = TAGGANT_JSFILE;
                 res = TaggantGetTaggant(pCtx, (void*)&fin, filetype, &taggant);
                 if (res != TNOERR)
                 {
                     TaggantFreeTaggant(taggant);
                     taggant = NULL;
-                    cout << " - check against BIN file\n";
-                    filetype = TAGGANT_BINFILE;
+                    cout << " - check against TXT file\n";
+                    filetype = TAGGANT_TXTFILE;
                     res = TaggantGetTaggant(pCtx, (void*)&fin, filetype, &taggant);
+                    if (res != TNOERR)
+                    {
+                        TaggantFreeTaggant(taggant);
+                        taggant = NULL;
+                        cout << " - check against BIN file\n";
+                        filetype = TAGGANT_BINFILE;
+                        res = TaggantGetTaggant(pCtx, (void*)&fin, filetype, &taggant);
+                    }
                 }
             }
         }
         if (res == TNOERR)
         {
-            process_taggant(pCtx, &fin, &peh, taggant, cacert, tscert);
+            process_taggant(pCtx, &fin, taggant, cacert, tscert);
             // Enumerate taggants
             while ((res = TaggantGetTaggant(pCtx, (void*)&fin, filetype, &taggant)) == TNOERR)
             {
-                process_taggant(pCtx, &fin, &peh, taggant, cacert, tscert);
+                process_taggant(pCtx, &fin, taggant, cacert, tscert);
             }
         }
         else

@@ -62,16 +62,12 @@
 #ifndef FILEIO_H_
 #define FILEIO_H_
 
-#include <iostream>
 #include <fstream>
-#include <istream>
 #include "taggant_types.h"
 
-using namespace std;
-
-size_t __DECLARATION fileio_fread(ifstream* fin, void* buffer, size_t size);
-int __DECLARATION  fileio_fseek(ifstream* fin, UNSIGNED64 offset, int type);
-UNSIGNED64 __DECLARATION fileio_ftell(ifstream* fin);
-UNSIGNED64 fileio_fsize (ifstream* fin);
+size_t __DECLARATION fileio_fread(std::ifstream* fin, void* buffer, size_t size);
+int __DECLARATION fileio_fseek(std::ifstream* fin, UNSIGNED64 offset, int type);
+UNSIGNED64 __DECLARATION fileio_ftell(std::ifstream* fin);
+UNSIGNED64 fileio_fsize (std::ifstream* fin);
 
 #endif /* FILEIO_H_ */

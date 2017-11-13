@@ -98,7 +98,7 @@ void bubblesort_hashmap(PHASHBLOB_HASHMAP_DOUBLE regions, UNSIGNED32 lenindex);
 int exclude_region_from_hashmap(PHASHBLOB_HASHMAP_DOUBLE regions, UNSIGNED64 offset, UNSIGNED64 size);
 UNSIGNED32 compute_region_hash(PTAGGANTCONTEXT pCtx, PFILEOBJECT hFile, EVP_MD_CTX* evp, HASHBLOB_HASHMAP_DOUBLE* region, char* buf);
 UNSIGNED32 taggant_compute_default_hash(PTAGGANTCONTEXT pCtx, PHASHBLOB_FULLFILE pHash, PFILEOBJECT hFile, PE_ALL_HEADERS *peh, UNSIGNED64 uObjectEnd, UNSIGNED64 uFileEnd, UNSIGNED32 uTaggantSize);
-UNSIGNED32 taggant_read_binary(PTAGGANTCONTEXT pCtx, PFILEOBJECT fp, PTAGGANT1 *pTaggant);
+UNSIGNED32 taggant_read_from_pe(PTAGGANTCONTEXT pCtx, PFILEOBJECT fp, PE_ALL_HEADERS *peh, PTAGGANT1 *pTaggant);
 void taggant_free_taggantobj_content(PTAGGANTOBJ1 pTaggantObj);
 
 #endif /* TAGGANT1_HEADER */

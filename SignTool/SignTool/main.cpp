@@ -59,24 +59,52 @@
  * ====================================================================
  */
 
+#define NOMINMAX
 #include <windows.h>
 #include <string.h>
 #include <time.h>
+#include <iostream>
+#include <vector>
+#include <algorithm>
 #include "fileio.h"
-#include "taggant_types.h"
-#include "taggantlib.h"
-#include "winpe.h"
 
 using namespace std;
 
-#define SIGNTOOL_VERSION 0x010000
+#define SIGNTOOL_VERSION 0x030000
 
 #define SSV_LIB_NAME "libssv.dll"
 #define SPV_LIB_NAME "libspv.dll"
 
 #ifdef _MSC_VER 
 #define strcasecmp _stricmp
+#define strncasecmp _strnicmp
 #endif
+
+#ifdef _WIN32
+#	define STDCALL __stdcall
+#else
+#	define STDCALL
+#endif
+
+#ifdef __GNUC__
+#define DEPRECATED __attribute__((deprecated))
+#elif defined(_MSC_VER)
+#define DEPRECATED __declspec(deprecated)
+#else
+#pragma message("WARNING: DEPRECATED attribute is not supported by the compiler")
+#define DEPRECATED
+#endif
+
+const char* usage = "Usage:\n"
+                    "signtool.exe [-silent] <file_to_sign> <license.pem> [-t:<type>] [-csa -r:<root.crt>] [-s:<url>] [-o:<taggant.ae>]\n"
+                    "signtool.exe [-silent] <file_to_sign> <taggant.ae> -r:<root.crt> [-t:<type>]\n"
+                    "\n"
+                    "-t:<type> - Type of the file to sign (pe/js/txt/bin/seal). Defaults to pe.\n"
+                    "-csa - Enables CSA Mode.\n"
+                    "-r:<root.crt> - IEEE root certificate in PEM format.\n"
+                    "-s:<url> - Timestamp server URL. Defaults to http://taggant-tsa.ieee.org/.\n"
+                    "-o:<taggant.ae> - Taggant output path for the seal type.\n"
+                    "\n";
 
 static UNSIGNED32(STDCALL *pSSVTaggantInitializeLibrary) (__in_opt TAGGANTFUNCTIONS *pFuncs, __out UNSIGNED64 *puVersion);
 static void(STDCALL *pSSVTaggantFinalizeLibrary) ();
@@ -182,72 +210,301 @@ int init_functions()
     return 1;
 }
 
+int process_csa_mode(int silent, char* root, char* file, TAGGANTCONTAINER filetype, UNSIGNED32* ffhres, UNSIGNED32* hmhres)
+{
+    int err = 0;
+
+    // Initialize SSV taggant library
+    TAGGANTFUNCTIONS funcs;
+    memset(&funcs, 0, sizeof(TAGGANTFUNCTIONS));
+    UNSIGNED64 uVersion;
+    // Set structure size
+    funcs.size = sizeof(TAGGANTFUNCTIONS);
+    pSSVTaggantInitializeLibrary(&funcs, &uVersion);
+
+    if (!silent) cout << "SSV Taggant Library version " << uVersion << "\n";
+
+    if (uVersion < TAGGANT_LIBRARY_VERSION3)
+    {
+        if (!silent) cout << "Current SSV taggant library does not support version 3\n\n";
+        err = 1;
+    }
+
+    // Check root certificate
+    if (pSSVTaggantCheckCertificate(root) != TNOERR)
+    {
+        if (!silent) cout << "Error: root certificate is invalid\n\n" << usage;
+        err = 1;
+    }
+
+    if (!err)
+    {
+        // Check the previous taggant before adding a new one
+        UNSIGNED32 res = TNOERR;
+        // Create taggant context
+        PTAGGANTCONTEXT pCtx;
+        if ((res = pSSVTaggantContextNewEx(&pCtx)) == TNOERR)
+        {
+            // Vendor should check version flow here!
+            pCtx->FileReadCallBack = (size_t(__DECLARATION *)(void*, void*, size_t))fileio_fread;
+            pCtx->FileSeekCallBack = (int (__DECLARATION *)(void*, UNSIGNED64, int))fileio_fseek;
+            pCtx->FileTellCallBack = (UNSIGNED64(__DECLARATION *)(void*))fileio_ftell;
+
+            // Try to open the file
+            ifstream fin(file, ios::binary);
+            if (fin.is_open())
+            {
+                PTAGGANT taggant = NULL;
+                // Get the taggant from the file
+                if ((res = pSSVTaggantGetTaggant(pCtx, (void*)&fin, filetype, &taggant)) == TNOERR)
+                {
+                    // Initialize taggant object before it will be validated
+                    PTAGGANTOBJ	tag_obj;
+                    if ((res = pSSVTaggantObjectNewEx(taggant, 0, TAGGANT_PEFILE, &tag_obj)) == TNOERR)
+                    {
+                        // Validate the taggant
+                        if ((res = pSSVTaggantValidateSignature(tag_obj, taggant, (PVOID)root)) == TNOERR)
+                        {
+                            // get the ignore hash map value
+                            UNSIGNED8 ignorehmh = 0;
+                            UNSIGNED32 ihmhsize = sizeof(UNSIGNED8);
+                            res = pSSVTaggantGetInfo(tag_obj, EIGNOREHMH, &ihmhsize, (char*)&ignorehmh);
+                            if (res == TNOERR || res == TNOTFOUND || res == TERRORKEY)
+                            {
+                                res = TNOERR;
+                                if (!ignorehmh)
+                                {
+                                    // Get file hash type
+                                    // Do a quick file check using hash map (in case it exists)
+                                    PHASHBLOB_HASHMAP_DOUBLE dbl = NULL;
+                                    int dbl_count = pSSVTaggantGetHashMapDoubles(tag_obj, &dbl);
+                                    if (dbl_count)
+                                    {
+                                        // Compute hashmap of the current file, remember result for later
+                                        *hmhres = pSSVTaggantValidateHashMap(pCtx, tag_obj, (void*)&fin);
+                                    }
+                                }
+
+                                // get the previous tag value
+                                UNSIGNED8 tagprev = 0;
+                                UNSIGNED32 tprevsize = sizeof(UNSIGNED8);
+                                res = pSSVTaggantGetInfo(tag_obj, ETAGPREV, &tprevsize, (char*)&tagprev);
+                                if (res == TNOERR || res == TNOTFOUND || res == TERRORKEY)
+                                {
+                                    res = TNOERR;
+                                    // Check full file hash only if there is no previous tag
+                                    if (!tagprev)
+                                    {
+                                        UNSIGNED64 file_end = 0;
+                                        UNSIGNED32 size = sizeof(UNSIGNED64);
+                                        // Get file end value from the taggant, used for taggant v1 only
+                                        if (pSSVTaggantGetInfo(tag_obj, EFILEEND, &size, (char*)&file_end) == TNOERR)
+                                        {
+                                            if (!file_end)
+                                            {
+                                                file_end = fileio_fsize(&fin);
+                                            }
+                                            // Compute default hashes of the current file
+                                            *ffhres = pSSVTaggantValidateDefaultHashes(pCtx, tag_obj, (void*)&fin, 0, file_end);
+                                            if (*ffhres != TNOERR)
+                                            {
+                                                res = *ffhres;
+                                            }
+                                        }
+                                    }
+                                    else if (hmhres != TNOERR)
+                                    {
+                                        res = *hmhres;
+                                    }
+                                }
+                            }
+                        }
+                        pSSVTaggantObjectFree(tag_obj);
+                    }
+                }
+                pSSVTaggantFreeTaggant(taggant);
+                fin.close();
+            }
+            else
+            {
+                if (!silent) cout << "Error: Cannot open file to validate for CSA mode\n\n";
+                err = 1;
+            }
+            pSSVTaggantContextFree(pCtx);
+        }
+        if (res != TNOTAGGANTS && res != TNOERR)
+        {
+            if (!silent) cout << "Error: Validation of the file for CSA mode failed with error " << res << " \n\n";
+            err = res;
+        }
+    }
+
+    pSSVTaggantFinalizeLibrary();
+
+    return err;
+}
+
+int validate_taggant(int silent, char* file, TAGGANTCONTAINER filetype, PVOID pRootCert)
+{
+    int err = 0;
+
+    // Initialize SSV taggant library
+    TAGGANTFUNCTIONS funcs;
+    memset(&funcs, 0, sizeof(TAGGANTFUNCTIONS));
+    UNSIGNED64 uVersion;
+    // Set structure size
+    funcs.size = sizeof(TAGGANTFUNCTIONS);
+    pSSVTaggantInitializeLibrary(&funcs, &uVersion);
+
+    if (!silent) cout << "SSV Taggant Library version " << uVersion << "\n";
+
+    if (uVersion < TAGGANT_LIBRARY_VERSION3)
+    {
+        if (!silent) cout << "Current SSV taggant library does not support version 3\n\n";
+        err = 1;
+    }
+
+    // Check root certificate
+    if (pSSVTaggantCheckCertificate(pRootCert) != TNOERR)
+    {
+        if (!silent) cout << "Error: root certificate is invalid\n\n" << usage;
+        err = 1;
+    }
+
+    // Check the previous taggant before adding a new one
+    if (!err)
+    {
+        UNSIGNED32 res = TNOERR;
+        // Create taggant context
+        PTAGGANTCONTEXT pCtx;
+        if ((res = pSSVTaggantContextNewEx(&pCtx)) == TNOERR)
+        {
+            // Vendor should check version flow here!
+            pCtx->FileReadCallBack = (size_t(__DECLARATION *)(void*, void*, size_t))fileio_fread;
+            pCtx->FileSeekCallBack = (int (__DECLARATION *)(void*, UNSIGNED64, int))fileio_fseek;
+            pCtx->FileTellCallBack = (UNSIGNED64(__DECLARATION *)(void*))fileio_ftell;
+
+            // Try to open the taggant file
+            ifstream fin(file, ios::binary);
+            if (fin.is_open())
+            {
+                PTAGGANT taggant = NULL;
+                // Get the taggant from the file
+                if ((res = pSSVTaggantGetTaggant(pCtx, (void*)&fin, filetype, &taggant)) == TNOERR)
+                {
+                    // Initialize taggant object before it will be validated
+                    PTAGGANTOBJ	tag_obj;
+                    if ((res = pSSVTaggantObjectNewEx(taggant, uVersion, filetype, &tag_obj)) == TNOERR)
+                    {
+                        // Validate the taggant
+                        res = pSSVTaggantValidateSignature(tag_obj, taggant, pRootCert);
+                        pSSVTaggantObjectFree(tag_obj);
+                    }
+                }
+                pSSVTaggantFreeTaggant(taggant);
+                fin.close();
+            }
+            else
+            {
+                if (!silent) cout << "Error: Cannot open the taggant file to validate\n\n";
+                err = 1;
+            }
+            pSSVTaggantContextFree(pCtx);
+        }
+        if (res != TNOTAGGANTS && res != TNOERR)
+        {
+            if (!silent) cout << "Error: Validation of the taggant file failed with error " << res << " \n\n";
+            err = res;
+        }
+    }
+
+    pSSVTaggantFinalizeLibrary();
+
+    return err;
+}
+
 int main(int argc, char *argv[], char *envp[])
 {
     int silent = 0;
     int filearg = 1;
 
-	if ((argc > 1) && !stricmp(argv[1], "-silent"))
+    if ((argc > 1) && !strcasecmp(argv[1], "-silent"))
     {
         silent = 1;
         filearg = 2;
     }
 
-    if (!silent) cout << "SignTool Application (adds Taggant v2 to files)\n\n";
-    const char* usage = "Usage: signtool.exe [-silent] <file_to_sign> <license.pem> [optional] -t:<type> -csa -r:<root.crt> -s:<timestamp server url>\n\n-t:<type> - type of the file to sign (pe/js/txt/bin)\n-csa - enables CSA Mode\n-r:<root.crt> - root certificate for CSA Mode\n-s:<timestamp server url> - url to the timestamp server (default: http://taggant-tsa.ieee.org/)\n\n";
+    if (!silent) cout << "SignTool Application (adds Taggant v3 to files)\n\n";
 
-	// Check if number of arguments is not less than 2
-	if (argc < 2)
-	{
-		cout << "Error: Invalid Arguments, no file_to_sign and/or license.pem is specified!\n\n" << usage;
-		return 1;
-	}    
+    // Check if number of arguments is not less than 2
+    if (argc < filearg + 2)
+    {
+        cout << "Error: Invalid Arguments, no file_to_sign and/or license.pem is specified!\n\n" << usage;
+        return 1;
+    }    
 
     if (!init_functions())
     {
         return 1;
     }
 
-	// Get the type of the file to sign (pe/js)
-	TAGGANTCONTAINER filetype = TAGGANT_PEFILE;
+    // Get the type of the file to sign (pe/js)
+    TAGGANTCONTAINER filetype = TAGGANT_PEFILE;
     int csamode = 0;
     char *rootfile = NULL;
     char *root = NULL;
     char *tsurl = NULL;
+    char *outfile = NULL;
 	if (argc >= 3)
 	{
         for (int i = 3; i < argc; i++)
         {
-            if (stricmp(argv[i], "-csa") == 0)
+            if (strcasecmp(argv[i], "-csa") == 0)
             {
                 csamode = 1;
-            } else if (strnicmp(argv[i], "-r:", 3) == 0)
+            } else if (strncasecmp(argv[i], "-r:", 3) == 0)
             {
-                int len = strlen(argv[i]) - 3 + 1;
+                size_t len = strlen(argv[i]) - 3 + 1;
                 rootfile = new char[len];
                 memset(rootfile, 0, len);
                 strcpy(rootfile, argv[i] + 3);
             }
-            else if (strnicmp(argv[i], "-t:", 3) == 0)
+            else if (strncasecmp(argv[i], "-t:", 3) == 0)
             {
-                char type[4];
+                char type[5];
                 memset(&type, 0, sizeof(type));
-                strncpy((char*)&type, argv[i] + 3, strlen(argv[i]) > 6 ? 3 : strlen(argv[i]) - 3);
+                strncpy((char*)&type, argv[i] + 3, strlen(argv[i]) > 7 ? 4 : strlen(argv[i]) - 3);
                 // Determine the type
-                if (stricmp((char*)&type, "js") == 0)
+                if (strcasecmp((char*)&type, "js") == 0)
                 {
                     filetype = TAGGANT_JSFILE;
-                } else if (stricmp((char*)&type, "txt") == 0)
+                } else if (strcasecmp((char*)&type, "txt") == 0)
                 {
                     filetype = TAGGANT_TXTFILE;
-                } else if (stricmp((char*)&type, "bin") == 0)
+                } else if (strcasecmp((char*)&type, "bin") == 0)
                 {
                     filetype = TAGGANT_BINFILE;
+                } else if (strcasecmp((char*)&type, "seal") == 0)
+                {
+                    filetype = TAGGANT_PESEALFILE;
                 }
             }
-            else if (strnicmp(argv[i], "-s:", 3) == 0)
+            else if (strncasecmp(argv[i], "-o:", 3) == 0)
             {
-                int len = strlen(argv[i]) - 3 + 1;
+                size_t len = strlen(argv[i]) - 3 + 1;
+                outfile = new char[len];
+                memset(outfile, 0, len);
+                strcpy(outfile, argv[i] + 3);
+                ifstream tmps(outfile, ios::binary);
+                if (tmps.is_open())
+                {
+                    cout << "Error: The output file already exists!\n\n";
+                    return 1;
+                }
+            }
+            else if (strncasecmp(argv[i], "-s:", 3) == 0)
+            {
+                size_t len = strlen(argv[i]) - 3 + 1;
                 tsurl = new char[len];
                 memset(tsurl, 0, len);
                 strcpy(tsurl, argv[i] + 3);
@@ -256,171 +513,33 @@ int main(int argc, char *argv[], char *envp[])
 	}
 
     int err = 0;
-    UNSIGNED32 ffhres = TNOTIMPLEMENTED;
-    UNSIGNED32 hmhres = TNOERR;
-
-    // If CSA mode is used, load and check root and tsroot certificates
-    if (csamode)
+    if (rootfile)
     {
-        // Initialize SSV taggant library
-        TAGGANTFUNCTIONS funcs;
-        memset(&funcs, 0, sizeof(TAGGANTFUNCTIONS));
-        UNSIGNED64 uVersion;
-        // Set structure size
-        funcs.size = sizeof(TAGGANTFUNCTIONS);
-        pSSVTaggantInitializeLibrary(&funcs, &uVersion);
-
-        if (!silent) cout << "SSV Taggant Library version " << uVersion << "\n";
-
-        if (uVersion < TAGGANT_LIBRARY_VERSION2)
+        ifstream tmps(rootfile, ios::binary);
+        if (tmps.is_open())
         {
-            if (!silent) cout << "Current SSV taggant library does not support version 2\n\n";
+            tmps.seekg(0, ios::end);
+            streamoff tmpsize = tmps.tellg();
+            root = new char[tmpsize + 1];
+            tmps.seekg(0, ios::beg);
+            tmps.read(root, tmpsize);
+            root[tmpsize] = 0;
+            tmps.close();
+        }
+        else
+        {
+            if (!silent) cout << "Error: root certificate file does not exist\n\n" << usage;
             err = 1;
         }
-
-        if (!err)
-        {
-            ifstream tmps(rootfile, ios::binary);
-            if (tmps.is_open())
-            {
-                tmps.seekg(0, ios::end);
-                long tmpsize = tmps.tellg();
-                root = new char[tmpsize];
-                tmps.seekg(0, ios::beg);
-                tmps.read(root, tmpsize);
-                tmps.close();
-
-                // Check certificate
-                if (pSSVTaggantCheckCertificate(root) != TNOERR)
-                {
-                    if (!silent) cout << "Error: root certificate is invalid\n\n" << usage;
-                    err = 1;
-                }
-            }
-            else
-            {
-                if (!silent) cout << "Error: root certificate file does not exist\n\n" << usage;
-                err = 1;
-            }
-
-            // Check the previous taggant before adding a new one
-            if (!err)
-            {                
-                UNSIGNED32 res = TNOERR;
-                // Create taggant context
-                PTAGGANTCONTEXT pCtx;
-                if ((res = pSSVTaggantContextNewEx(&pCtx)) == TNOERR)
-                {
-                    // Vendor should check version flow here!
-                    pCtx->FileReadCallBack = (size_t(__DECLARATION *)(void*, void*, size_t))fileio_fread;
-                    pCtx->FileSeekCallBack = (int (__DECLARATION *)(void*, UNSIGNED64, int))fileio_fseek;
-                    pCtx->FileTellCallBack = (UNSIGNED64(__DECLARATION *)(void*))fileio_ftell;
-                                        
-                    // Try to open the file
-                    ifstream fin(argv[filearg], ios::binary);
-                    if (fin.is_open())
-                    {
-                        void *taggant = NULL;                        
-                        // Get the taggant from the file
-                        if ((res = pSSVTaggantGetTaggant(pCtx, (void*)&fin, filetype, &taggant)) == TNOERR)
-                        {
-                            // Initialize taggant object before it will be validated
-                            PTAGGANTOBJ	tag_obj;
-                            if ((res = pSSVTaggantObjectNewEx(taggant, 0, TAGGANT_PEFILE, &tag_obj)) == TNOERR)
-                            {
-                                // Validate the taggant
-                                if ((res = pSSVTaggantValidateSignature(tag_obj, taggant, (PVOID)root)) == TNOERR)
-                                {
-                                    // get the ignore hash map value
-                                    UNSIGNED8 ignorehmh = 0;
-                                    UNSIGNED32 ihmhsize = sizeof(UNSIGNED8);
-                                    res = pSSVTaggantGetInfo(tag_obj, EIGNOREHMH, &ihmhsize, (char*)&ignorehmh);
-                                    if (res == TNOERR || res == TNOTFOUND || res == TERRORKEY)
-                                    {
-                                        res = TNOERR;
-                                        if (!ignorehmh)
-                                        {
-                                            // Get file hash type
-                                            // Do a quick file check using hash map (in case it exists)
-                                            PHASHBLOB_HASHMAP_DOUBLE dbl = NULL;
-                                            int dbl_count = pSSVTaggantGetHashMapDoubles(tag_obj, &dbl);
-                                            if (dbl_count)
-                                            {
-                                                // Compute hashmap of the current file, remember result for later
-                                                hmhres = pSSVTaggantValidateHashMap(pCtx, tag_obj, (void*)&fin);
-                                            }
-                                        }
-
-                                        // get the previous tag value
-                                        UNSIGNED8 tagprev = 0;
-                                        UNSIGNED32 tprevsize = sizeof(UNSIGNED8);
-                                        res = pSSVTaggantGetInfo(tag_obj, ETAGPREV, &tprevsize, (char*)&tagprev);
-                                        if (res == TNOERR || res == TNOTFOUND || res == TERRORKEY)
-                                        {
-                                            res = TNOERR;
-                                            // Check full file hash only if there is no previous tag
-                                            if (!tagprev)
-                                            {
-                                                UNSIGNED64 file_end = 0;
-                                                UNSIGNED32 size = sizeof(UNSIGNED64);
-                                                // Get file end value from the taggant, used for taggant v1 only
-                                                if (pSSVTaggantGetInfo(tag_obj, EFILEEND, &size, (char*)&file_end) == TNOERR)
-                                                {
-                                                    if (!file_end)
-                                                    {
-                                                        file_end = fileio_fsize(&fin);
-                                                    }
-                                                    int object_end = 0;
-                                                    if (filetype == TAGGANT_PEFILE)
-                                                    {
-                                                        PE_ALL_HEADERS peh;
-                                                        if (winpe_is_correct_pe_file(&fin, &peh))
-                                                        {
-                                                            object_end = winpe_object_size(&fin, &peh);
-                                                        }
-                                                    }
-                                                    // Compute default hashes of the current file
-                                                    ffhres = pSSVTaggantValidateDefaultHashes(pCtx, tag_obj, (void*)&fin, object_end, file_end);
-
-                                                    if (ffhres != TNOERR)
-                                                    {
-                                                        res = ffhres;
-                                                    }
-                                                }
-                                            }
-                                            else if (hmhres != TNOERR)
-                                            {
-                                                res = hmhres;
-                                            }
-                                        }
-                                    }
-                                }
-                                pSSVTaggantObjectFree(tag_obj);
-                            }
-                        }
-                        pSSVTaggantFreeTaggant(taggant);
-                        fin.close();
-                    }
-                    else
-                    {
-                        if (!silent) cout << "Error: Cannot open file to validate for CSA mode\n\n";
-                        err = 1;
-                    }
-                    pSSVTaggantContextFree(pCtx);
-                }
-                if (res != TNOTAGGANTS && res != TNOERR)
-                {
-                    if (!silent) cout << "Error: Validation of the file for CSA mode failed with error " << res <<" \n\n";
-                    err = res;
-                }
-            }
-        }
-        pSSVTaggantFinalizeLibrary();
     }
 
-    delete[] rootfile;
-    delete[] root;
-
+    // If CSA mode is used, load and check root and tsroot certificates
+    UNSIGNED32 ffhres = TNOTIMPLEMENTED;
+    UNSIGNED32 hmhres = TNOERR;
+    if (csamode)
+    {
+        err = process_csa_mode(silent, root, argv[filearg], filetype, &ffhres, &hmhres);
+    }
     if (!err)
     {
         // Check if the first argument refers to existing file
@@ -438,16 +557,15 @@ int main(int argc, char *argv[], char *envp[])
             pSPVTaggantInitializeLibrary(&funcs, &uVersion);
             if (!silent) cout << "SPV Taggant Library version " << uVersion << "\n";
             // Make sure the taggant library supports version 2
-            if (uVersion < TAGGANT_LIBRARY_VERSION2)
+            if (uVersion < TAGGANT_LIBRARY_VERSION3)
             {
-                if (!silent) cout << "Error: Current taggant library does not support version 2\n\n";
+                if (!silent) cout << "Error: Current taggant library does not support version 3\n\n";
                 err = 1;
             }
 
             if (!err)
             {
                 // Check if the license.pem file exist
-                char* lic;
                 ifstream flc(argv[filearg + 1], ios::binary);
                 if (!flc.is_open())
                 {
@@ -456,168 +574,253 @@ int main(int argc, char *argv[], char *envp[])
                 }
                 else
                 {
-                    // Read license from file
+                    // Read license or taggant from file
                     flc.seekg(0, ios::end);
-                    long fsize = flc.tellg();
-                    lic = new char[fsize];
-                    flc.seekg(0, ios::beg);
-                    flc.read(lic, fsize);
-
-                    // Make sure the license is valid
-                    UNSIGNED64 ltime;
-                    if (pSPVTaggantGetLicenseExpirationDate(lic, &ltime) == TNOERR)
+                    size_t fsize = flc.tellg();
+                    char* lic = NULL;
+                    try { lic = new char[fsize]; }
+                    catch (...) {}
+                    if (lic)
                     {
-                        if (!silent) cout << "License file is valid, expiration date is " << asctime(gmtime((time_t*)&ltime));
+                        flc.seekg(0, ios::beg);
+                        flc.read(lic, fsize);
 
-                        // Create taggant context
-                        PTAGGANTCONTEXT pCtx;
-                        UNSIGNED32 ctxres = pSPVTaggantContextNewEx(&pCtx);
-                        if (ctxres == TNOERR)
+                        // Make sure the license or the taggant is valid
+                        UNSIGNED64 ltime = 0;
+                        if (pSPVTaggantGetLicenseExpirationDate(lic, &ltime) == TNOERR)
                         {
-                            // Vendor should check version flow here!
-                            pCtx->FileReadCallBack = (size_t(__DECLARATION *)(void*, void*, size_t))fileio_fread;
-                            pCtx->FileSeekCallBack = (int (__DECLARATION *)(void*, UNSIGNED64, int))fileio_fseek;
-                            pCtx->FileTellCallBack = (UNSIGNED64(__DECLARATION *)(void*))fileio_ftell;
+                            if (!silent) cout << "License file is valid, expiration date is " << asctime(gmtime((time_t*)&ltime));
 
-                            PTAGGANTOBJ tagobj;
-                            UNSIGNED32 objres = pSPVTaggantObjectNewEx(NULL, TAGGANT_LIBRARY_VERSION2, filetype, &tagobj);
-                            if (objres == TNOERR)
+                            // Create taggant context
+                            PTAGGANTCONTEXT pCtx;
+                            UNSIGNED32 ctxres = pSPVTaggantContextNewEx(&pCtx);
+                            if (ctxres == TNOERR)
                             {
-                                UNSIGNED32 hashres = pSPVTaggantComputeHashes(pCtx, tagobj, &ffs, 0, 0, 0);
-                                if (hashres == TNOERR)
+                                // Vendor should check version flow here!
+                                pCtx->FileReadCallBack = (size_t(__DECLARATION *)(void*, void*, size_t))fileio_fread;
+                                pCtx->FileSeekCallBack = (int (__DECLARATION *)(void*, UNSIGNED64, int))fileio_fseek;
+                                pCtx->FileTellCallBack = (UNSIGNED64(__DECLARATION *)(void*))fileio_ftell;
+
+                                PTAGGANTOBJ tagobj;
+                                UNSIGNED32 objres;
+                                if (filetype == TAGGANT_PESEALFILE)
+                                    objres = pSPVTaggantObjectNewEx(NULL, TAGGANT_LIBRARY_VERSION3, filetype, &tagobj);
+                                else
+                                    objres = pSPVTaggantObjectNewEx(NULL, TAGGANT_LIBRARY_VERSION2, filetype, &tagobj);
+                                if (objres == TNOERR)
                                 {
-                                    if (!silent) cout << "File hashes computed successfully\n";
-
-                                    // set packer information
-                                    PACKERINFO packer_info;
-                                    memset(&packer_info, 0, sizeof(PACKERINFO));
-                                    packer_info.PackerId = 1;
-                                    packer_info.VersionMajor = SIGNTOOL_VERSION >> 16 & 0xFF;
-                                    packer_info.VersionMinor = SIGNTOOL_VERSION >> 8 & 0xFF;
-                                    packer_info.VersionBuild = SIGNTOOL_VERSION & 0xFF;
-
-                                    UNSIGNED32 packerres = pSPVTaggantPutInfo(tagobj, EPACKERINFO, sizeof(PACKERINFO), (char*)&packer_info);
-                                    if (packerres == TNOERR)
+                                    UNSIGNED32 hashres = pSPVTaggantComputeHashes(pCtx, tagobj, &ffs, 0, 0, 0);
+                                    if (hashres == TNOERR)
                                     {
-                                        UNSIGNED32 ihmhres = TNOERR;
-                                        if ((ffhres == TNOERR) && (hmhres != TNOERR))
+                                        if (!silent) cout << "File hashes computed successfully\n";
+
+                                        // set packer information
+                                        PACKERINFO packer_info;
+                                        memset(&packer_info, 0, sizeof(PACKERINFO));
+                                        packer_info.PackerId = 1;
+                                        packer_info.VersionMajor = SIGNTOOL_VERSION >> 16 & 0xFF;
+                                        packer_info.VersionMinor = SIGNTOOL_VERSION >> 8 & 0xFF;
+                                        packer_info.VersionBuild = SIGNTOOL_VERSION & 0xFF;
+
+                                        UNSIGNED32 packerres = pSPVTaggantPutInfo(tagobj, EPACKERINFO, sizeof(PACKERINFO), (char*)&packer_info);
+                                        if (packerres == TNOERR)
                                         {
-                                            UNSIGNED8 ignorehmh = 1;
-                                            ihmhres = pSPVTaggantPutInfo(tagobj, EIGNOREHMH, sizeof(UNSIGNED8), (char*)&ignorehmh);
-                                        }
-                                        if (ihmhres == TNOERR)
-                                        {
-                                            // Set contributor list information
-                                            char *clist = "CONTRIBUTORS LIST HERE";
-                                            UNSIGNED32 clistres = pSPVTaggantPutInfo(tagobj, ECONTRIBUTORLIST, strlen(clist) + 1, clist);
-                                            if (clistres == TNOERR)
+                                            UNSIGNED32 ihmhres = TNOERR;
+                                            if (((ffhres == TNOERR) && (hmhres != TNOERR)) || filetype == TAGGANT_PESEALFILE)
                                             {
-                                                // try to put timestamp
-                                                if (!silent) cout << "Put timestamp\n";
-                                                UNSIGNED32 timestampres = pSPVTaggantPutTimestamp(tagobj, tsurl ? tsurl : "http://taggant-tsa.ieee.org/", 50);
-                                                if (!silent)
+                                                UNSIGNED8 ignorehmh = 1;
+                                                ihmhres = pSPVTaggantPutInfo(tagobj, EIGNOREHMH, sizeof(UNSIGNED8), (char*)&ignorehmh);
+                                            }
+                                            if (ihmhres == TNOERR)
+                                            {
+                                                // Set contributor list information
+                                                char *clist = "CONTRIBUTORS LIST HERE";
+                                                UNSIGNED32 clistres = pSPVTaggantPutInfo(tagobj, ECONTRIBUTORLIST, strlen(clist) + 1, clist);
+                                                if (clistres == TNOERR)
                                                 {
-                                                    switch (timestampres)
+                                                    // try to put timestamp
+                                                    if (!silent) cout << "Put timestamp\n";
+                                                    UNSIGNED32 timestampres = pSPVTaggantPutTimestamp(tagobj, tsurl ? tsurl : "http://taggant-tsa.ieee.org/", 50);
+                                                    if (!silent)
                                                     {
-                                                        case TNOERR:
+                                                        switch (timestampres)
                                                         {
-                                                            cout << "Timestamp successfully placed\n";
+                                                            case TNOERR:
+                                                            {
+                                                                cout << "Timestamp successfully placed\n";
+                                                                break;
+                                                            }
+                                                            case TNONET:
+                                                            {
+                                                                cout << "Warning: Can't put timestamp, no connection to the internet\n";
+                                                                break;
+                                                            }
+                                                            case TTIMEOUT:
+                                                            {
+                                                                cout << "Warning: Can't put timestamp, the timestamp authority server response time has expired\n";
+                                                                break;
+                                                            }
+                                                            default:
+                                                            {
+                                                                cout << "Warning: Can't put timestamp, error: " << timestampres << "\n";
+                                                                break;
+                                                            }
+                                                        }
+                                                        cout << "Prepare the taggant\n";
+                                                    }
+                                                    // allocate the approximate buffer for CMS
+                                                    UNSIGNED32 taggantsize = 0x10000;
+                                                    UNSIGNED32 prepareres = TMEMORY;
+                                                    char* taggant = NULL;
+                                                    try
+                                                    {
+                                                        taggant = new char[taggantsize];
+                                                        prepareres = pSPVTaggantPrepare(tagobj, (PVOID)lic, taggant, &taggantsize);
+                                                    }
+                                                    catch (...) {}
+                                                    // if the allocated buffer is not sufficient then allocate bigger buffer
+                                                    if (prepareres == TINSUFFICIENTBUFFER)
+                                                    {
+                                                        delete[] taggant;
+                                                        taggantsize *= 2;
+                                                        try
+                                                        {
+                                                            taggant = new char[taggantsize];
+                                                            prepareres = pSPVTaggantPrepare(tagobj, (PVOID)lic, taggant, &taggantsize);
+                                                        }
+                                                        catch (...) {}
+                                                    }
+                                                    if (prepareres == TNOERR)
+                                                    {
+                                                        if (!silent) cout << "Taggant successfully created\n";
+                                                        fstream ofs;
+                                                        switch (filetype)
+                                                        {
+                                                        case TAGGANT_PEFILE:
+                                                        case TAGGANT_JSFILE:
+                                                        case TAGGANT_BINFILE:
+                                                        case TAGGANT_TXTFILE:
+                                                            // append the file with the taggant
+                                                            ofs.open(argv[filearg], ios::binary | ios::in | ios::out);
+                                                            ofs.seekg(0, ios_base::end);
+                                                            ofs.write(taggant, taggantsize);
+                                                            if (ofs.fail()) prepareres = TFILEERROR;
+                                                            ofs.close();
+                                                            break;
+                                                        case TAGGANT_PESEALFILE:
+                                                            // copy the taggant to the output file
+                                                            ofs.open(outfile, ios::binary | ios::in | ios::out | ios::trunc);
+                                                            ofs.write(taggant, taggantsize);
+                                                            if (ofs.fail()) prepareres = TFILEERROR;
+                                                            ofs.close();
                                                             break;
                                                         }
-                                                        case TNONET:
+                                                        if (!silent)
                                                         {
-                                                            cout << "Warning: Can't put timestamp, no connection to the internet\n";
-                                                            break;
-                                                        }
-                                                        case TTIMEOUT:
-                                                        {
-                                                            cout << "Warning: Can't put timestamp, the timestamp authority server response time has expired\n";
-                                                            break;
-                                                        }
-                                                        default:
-                                                        {
-                                                            cout << "Warning: Can't put timestamp, error: " << timestampres << "\n";
-                                                            break;
+                                                            if (prepareres == TNOERR)
+                                                            {
+                                                                cout << "Taggant is written to file\n";
+                                                            }
+                                                            else
+                                                            {
+                                                                cout << "Error: Could not write taggant to file with result: " << prepareres << "\n\n";
+                                                            }
                                                         }
                                                     }
-                                                    cout << "Prepare the taggant\n";
-                                                }
-                                                // allocate the approximate buffer for CMS
-                                                UNSIGNED32 taggantsize = 0x10000;
-                                                char* taggant = new char[taggantsize];
-                                                UNSIGNED32 prepareres = pSPVTaggantPrepare(tagobj, (PVOID)lic, taggant, &taggantsize);
-                                                // if the allocated buffer is not sufficient then allocate bigger buffer
-                                                if (prepareres == TINSUFFICIENTBUFFER)
-                                                {
+                                                    else
+                                                    {
+                                                        if (!silent) cout << "Error: TaggantPrepare failed with result: " << prepareres << "\n\n";
+                                                    }
                                                     delete[] taggant;
-                                                    taggantsize = taggantsize * 2;
-                                                    taggant = new char[taggantsize];
-                                                    prepareres = pSPVTaggantPrepare(tagobj, (PVOID)lic, taggant, &taggantsize);
-                                                }
-                                                if (prepareres == TNOERR)
-                                                {
-                                                    if (!silent) cout << "Taggant successfully created\n";
-                                                    // append the file with the taggant
-                                                    ofstream ofs(argv[filearg], ios::binary | ios::app | ios::out);
-                                                    if (ofs.is_open())
-                                                    {
-                                                        ofs.write(taggant, taggantsize);
-                                                        if (!silent) cout << "Taggant is written to file\n";
-                                                    }
-                                                    ofs.close();
                                                 }
                                                 else
                                                 {
-                                                    if (!silent) cout << "Error: TaggantPrepare failed with result: " << prepareres << "\n\n";
+                                                    if (!silent) cout << "Error: TaggantSetInfo failed to set contributor list information with result: " << clistres << "\n\n";
+                                                    err = 1;
                                                 }
-                                                delete[] taggant;
                                             }
                                             else
                                             {
-                                                if (!silent) cout << "Error: TaggantSetInfo failed to set contributor list information with result: " << clistres << "\n\n";
+                                                if (!silent) cout << "Error: TaggantSetInfo failed to set EIGNOREHMH with result: " << ihmhres << "\n\n";
                                                 err = 1;
                                             }
                                         }
                                         else
                                         {
-                                            if (!silent) cout << "Error: TaggantSetInfo failed to set EIGNOREHMH with result: " << ihmhres << "\n\n";
+                                            if (!silent) cout << "Error: TaggantSetInfo failed to set packer information with result: " << packerres << "\n\n";
                                             err = 1;
                                         }
                                     }
                                     else
                                     {
-                                        if (!silent) cout << "Error: TaggantSetInfo failed to set packer information with result: " << packerres << "\n\n";
+                                        if (!silent) cout << "Error: TaggantComputeHashes failed with result: " << hashres << "\n\n";
                                         err = 1;
                                     }
+                                    pSPVTaggantObjectFree(tagobj);
                                 }
                                 else
                                 {
-                                    if (!silent) cout << "Error: TaggantComputeHashes failed with result: " << hashres << "\n\n";
+                                    if (!silent) cout << "Error: TaggantObjectNewEx failed with result: " << objres << "\n\n";
                                     err = 1;
                                 }
-                                pSPVTaggantObjectFree(tagobj);
+                                pSPVTaggantContextFree(pCtx);
                             }
                             else
                             {
-                                if (!silent) cout << "Error: TaggantObjectNewEx failed with result: " << objres << "\n\n";
+                                if (!silent) cout << "Error: TaggantContextNewEx failed with result: " << ctxres << "\n\n";
                                 err = 1;
                             }
-                            pSPVTaggantContextFree(pCtx);
+                        }
+                        else if (validate_taggant(silent, argv[filearg + 1], TAGGANT_PESEALFILE, root) == TNOERR)
+                        {
+                            fstream ofs;
+                            UNSIGNED32 prepareres = TNOERR;
+                            switch (filetype)
+                            {
+                            case TAGGANT_PEFILE:
+                            case TAGGANT_JSFILE:
+                            case TAGGANT_BINFILE:
+                            case TAGGANT_TXTFILE:
+                                // append the file with the taggant
+                                ofs.open(argv[filearg], ios::binary | ios::in | ios::out);
+                                if (ofs.is_open())
+                                {
+                                    ofs.seekg(0, ios_base::end);
+                                    ofs.write(lic, fsize);
+                                    if (ofs.fail()) prepareres = TFILEERROR;
+                                    ofs.close();
+                                }
+                                break;
+                            case TAGGANT_PESEALFILE:
+                                prepareres = TNOTIMPLEMENTED;
+                                break;
+                            }
+                            if (!silent)
+                            {
+                                if (prepareres == TNOERR)
+                                {
+                                    cout << "Taggant is written to file\n";
+                                }
+                                else
+                                {
+                                    cout << "Error: Could not write taggant to file with result: " << prepareres << "\n\n";
+                                }
+                            }
                         }
                         else
                         {
-                            if (!silent) cout << "Error: TaggantContextNewEx failed with result: " << ctxres << "\n\n";
+                            if (!silent) cout << "Error: License or taggant file is not valid\n\n";
                             err = 1;
                         }
+                        delete[] lic;
                     }
                     else
                     {
-                        if (!silent) cout << "Error: License file is not valid\n\n";
+                        if (!silent) cout << "Error: Not enough memory for the license or taggant file\n\n";
                         err = 1;
                     }
                 }
                 flc.close();
-                delete[] lic;
             }
             pSPVTaggantFinalizeLibrary();
         }
@@ -628,6 +831,10 @@ int main(int argc, char *argv[], char *envp[])
         }
         ffs.close();
     }
+
+    delete[] rootfile;
+    delete[] root;
     delete[] tsurl;
-	return err;
+    delete[] outfile;
+    return err;
 }

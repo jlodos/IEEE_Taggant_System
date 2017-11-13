@@ -59,10 +59,7 @@
  * ====================================================================
  */
 
-#include <iostream>
-#include <fstream>
-#include <istream>
-#include "taggant_types.h"
+#include "fileio.h"
 
 using namespace std;
 

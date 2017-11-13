@@ -80,6 +80,7 @@
 #define TAGGANTBLOB_VERSION2 1
 #define TAGGANT_VERSION1 1
 #define TAGGANT_VERSION2 2
+#define TAGGANT_VERSION3 3
 #define TAGGANT_MARKER_BEGIN 0x47474154 /* 'T'A'G'G' */
 #define TAGGANT_MARKER_END 0x53544E41   /* 'A'N'T'S' */
 #define HASHMAP_MAXIMUM_ENTRIES 100     /* TODO: Correct this value after testing with real certification system */

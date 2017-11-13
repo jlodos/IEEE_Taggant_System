@@ -513,7 +513,7 @@ UNSIGNED32 taggant2_read_textual(PTAGGANTCONTEXT pCtx, PFILEOBJECT fp, UNSIGNED6
                                         offset -= beginmarkersize;
                                         if (file_seek(pCtx, fp, offset, SEEK_SET))
                                         {
-                                            /* read and check end marker */
+                                            /* read and check begin marker */
                                             if (file_read_buffer(pCtx, fp, bmarker, beginmarkersize))
                                             {
                                                 if (strncmp(bmarker, beginmarker, beginmarkersize) != 0)
@@ -583,13 +583,14 @@ UNSIGNED32 taggant2_read_binary(PTAGGANTCONTEXT pCtx, PFILEOBJECT fp, UNSIGNED64
 {
     UNSIGNED32 res = TNOTAGGANTS;
     PTAGGANT2 tagbuf = NULL;
+    UNSIGNED16 hdver = (filetype == TAGGANT_PESEALFILE) ? TAGGANT_VERSION3 : TAGGANT_VERSION2;
 
     /* seek to the specified offset */
     offset -= sizeof(TAGGANT_HEADER2);
     if (file_seek(pCtx, fp, offset, SEEK_SET))
     {
         /* allocate memory for taggant */
-        tagbuf = memory_alloc(sizeof(TAGGANT2));
+        tagbuf = (PTAGGANT2)memory_alloc(sizeof(TAGGANT2));
         if (tagbuf)
         {
             memset(tagbuf, 0, sizeof(TAGGANT2));
@@ -602,7 +603,7 @@ UNSIGNED32 taggant2_read_binary(PTAGGANTCONTEXT pCtx, PFILEOBJECT fp, UNSIGNED64
                 {
                     TAGGANT_HEADER2_to_big_endian(&tagbuf->Header, &tagbuf->Header);
                 }
-                if (tagbuf->Header.Version == TAGGANT_VERSION2 && tagbuf->Header.MarkerBegin == TAGGANT_MARKER_BEGIN && tagbuf->Header.CMSLength)
+                if (tagbuf->Header.Version == hdver && tagbuf->Header.MarkerBegin == TAGGANT_MARKER_BEGIN && tagbuf->Header.CMSLength)
                 {
                     /* allocate buffer for CMS */				
                     tagbuf->CMSBuffer = memory_alloc(tagbuf->Header.CMSLength);
@@ -636,14 +637,6 @@ UNSIGNED32 taggant2_read_binary(PTAGGANTCONTEXT pCtx, PFILEOBJECT fp, UNSIGNED64
                                                 *pTaggant = tagbuf;
                                                 res = TNOERR;
                                             }
-                                            else
-                                            {
-                                                res = TNOTAGGANTS;
-                                            }
-                                        }
-                                        else
-                                        {
-                                            res = TNOTAGGANTS;
                                         }
                                     }
                                     else
@@ -670,10 +663,6 @@ UNSIGNED32 taggant2_read_binary(PTAGGANTCONTEXT pCtx, PFILEOBJECT fp, UNSIGNED64
                     {
                         res = TMEMORY;
                     }
-                }
-                else
-                {
-                    res = TNOTAGGANTS;
                 }
             }
             else
@@ -739,7 +728,8 @@ UNSIGNED32 taggant2_compute_default_hash_pe(EVP_MD_CTX *evp, PTAGGANTCONTEXT pCt
     
     for (i = 0; i < len; i++)
     {
-        if ((res = compute_region_hash(pCtx, hFile, evp, &regions[i], buf)) != TNOERR)
+        res = compute_region_hash(pCtx, hFile, evp, &regions[i], buf);
+        if (res != TNOERR)
         {
             break;
         }
@@ -807,7 +797,7 @@ UNSIGNED32 taggant2_compute_extended_hash_pe(EVP_MD_CTX *evp, PTAGGANTCONTEXT pC
     return res;
 }
 
-UNSIGNED32 taggant2_to_binary(BIO* cmsBio, BIO* outBio)
+UNSIGNED32 taggant2_to_binary(BIO* cmsBio, BIO* outBio, UNSIGNED16 ver)
 {
     int inlen;
     UNSIGNED32 cmslength = 0;
@@ -834,7 +824,7 @@ UNSIGNED32 taggant2_to_binary(BIO* cmsBio, BIO* outBio)
     }
 
     /* Fill out taggant header */
-    taghdr.Version = TAGGANT_VERSION2;
+    taghdr.Version = ver;
     taghdr.CMSLength = cmslength;
     taghdr.TaggantLength = sizeof(TAGGANT_HEADER2) + cmslength + /* sizeof(TAGGANT_FOOTER2) */ sizeof(UNSIGNED32) /* sizeof(EndMarker) */;
     taghdr.MarkerBegin = TAGGANT_MARKER_BEGIN;													
@@ -847,7 +837,7 @@ UNSIGNED32 taggant2_to_binary(BIO* cmsBio, BIO* outBio)
     return TNOERR;
 }
 
-UNSIGNED32 taggant2_to_textual(BIO* cmsBio, BIO* outBio)
+UNSIGNED32 taggant2_to_textual(BIO* cmsBio, BIO* outBio, UNSIGNED16 ver)
 {
     UNSIGNED32 cmslength, ftrlength;
     UNSIGNED32 res = TMEMORY;
@@ -863,7 +853,7 @@ UNSIGNED32 taggant2_to_textual(BIO* cmsBio, BIO* outBio)
         {
             /* fill out taggant header */
             memset(&taghdr, 0, sizeof(TAGGANT_HEADER2));
-            taghdr.Version = TAGGANT_VERSION2;
+            taghdr.Version = ver;
             taghdr.CMSLength = cmslength;
             taghdr.TaggantLength = ftrlength + cmslength + txt_taggant_header2_size();
             taghdr.MarkerBegin = TAGGANT_MARKER_BEGIN;
@@ -987,21 +977,26 @@ UNSIGNED32 taggant2_prepare(PTAGGANTOBJ2 pTaggantObj, const PVOID pLicense, TAGG
                                                     case TAGGANT_PEFILE:
                                                     case TAGGANT_BINFILE:
                                                     {
-                                                        res = taggant2_to_binary(cmsbio, outbio);
+                                                        res = taggant2_to_binary(cmsbio, outbio, TAGGANT_VERSION2);
+                                                        break;
+                                                    }
+                                                    case TAGGANT_PESEALFILE:
+                                                    {
+                                                        res = taggant2_to_binary(cmsbio, outbio, TAGGANT_VERSION3);
                                                         break;
                                                     }
                                                     case TAGGANT_JSFILE:
                                                     {
                                                         /* write comment's begin marker */
                                                         BIO_write(outbio, JS_COMMENT_BEGIN, (int)strlen(JS_COMMENT_BEGIN));
-                                                        res = taggant2_to_textual(cmsbio, outbio);
+                                                        res = taggant2_to_textual(cmsbio, outbio, TAGGANT_VERSION2);
                                                         /* write comment's end marker */
                                                         BIO_write(outbio, JS_COMMENT_END, (int)strlen(JS_COMMENT_END));
                                                         break;
                                                     }
                                                     case TAGGANT_TXTFILE:
                                                     {
-                                                        res = taggant2_to_textual(cmsbio, outbio);
+                                                        res = taggant2_to_textual(cmsbio, outbio, TAGGANT_VERSION2);
                                                         break;
                                                     }
                                                     default:
@@ -1352,7 +1347,6 @@ UNSIGNED32 taggant2_read_taggantblob2(BIO *inbio, PTAGGANTBLOB2 tagblob)
                 }                
             }
         }
-
     }
     /* free memory that we allocated here in case of error */
     if (res != TNOERR)
@@ -1393,7 +1387,7 @@ UNSIGNED32 taggant2_validate_signature(PTAGGANTOBJ2 pTaggantObj, PTAGGANT2 pTagg
     if (pTaggantObj->root)
     {
         /* Compare taggant version */
-        if (pTaggant->Header.Version == TAGGANT_VERSION2 && pTaggant->Header.CMSLength > 0)
+        if ((pTaggant->Header.Version == TAGGANT_VERSION2 || pTaggant->Header.Version == TAGGANT_VERSION3) && pTaggant->Header.CMSLength > 0)
         {			
             cmsbio = BIO_new(BIO_s_mem());
             if (cmsbio)
@@ -1403,7 +1397,7 @@ UNSIGNED32 taggant2_validate_signature(PTAGGANTOBJ2 pTaggantObj, PTAGGANT2 pTagg
                 if (pTaggantObj->CMS)
                 {
                     /* Check the CMS size, convert CMS to base64 and compare the length from the header for textual taggant */
-                    if (((pTaggant->tagganttype == TAGGANT_PEFILE || pTaggant->tagganttype == TAGGANT_BINFILE) && check_binary_cms(pTaggantObj->CMS, pTaggant->Header.CMSLength)) || ((pTaggant->tagganttype == TAGGANT_JSFILE || pTaggant->tagganttype == TAGGANT_TXTFILE) && check_textual_cms(pTaggantObj->CMS, pTaggant->CMSBufferSize, pTaggant->Header.CMSLength)))
+                    if (((pTaggant->tagganttype == TAGGANT_PEFILE || pTaggant->tagganttype == TAGGANT_BINFILE || pTaggant->tagganttype == TAGGANT_PESEALFILE) && check_binary_cms(pTaggantObj->CMS, pTaggant->Header.CMSLength)) || ((pTaggant->tagganttype == TAGGANT_JSFILE || pTaggant->tagganttype == TAGGANT_TXTFILE) && check_textual_cms(pTaggantObj->CMS, pTaggant->CMSBufferSize, pTaggant->Header.CMSLength)))
                     {
                         signedbio = BIO_new(BIO_s_mem());
                         if (signedbio)
@@ -1553,7 +1547,7 @@ UNSIGNED32 taggant2_validate_default_hashes_pe(PTAGGANTCONTEXT pCtx, PTAGGANTOBJ
     UNSIGNED32 res = TMEMORY;
     HASHBLOB_FULLFILE tmphb;
     UNSIGNED32 ds_offset, ds_size;
-    UNSIGNED64 fileend = uFileEnd;
+    UNSIGNED64 fileend = uFileEnd, objectend = uObjectEnd;
     EVP_MD_CTX evp;
     int valid_ds = 1;
     int valid_file = 0;
@@ -1565,7 +1559,7 @@ UNSIGNED32 taggant2_validate_default_hashes_pe(PTAGGANTCONTEXT pCtx, PTAGGANTOBJ
             /* if the fileend value is not specified, take the file size */
             if (!fileend)
             {
-                fileend = get_file_size(pCtx, hFile);
+                fileend = peh.filesize;
             }
             /* Check if the file contains digital signature and if it is placed at the end of the file
             * If it is, then reduce fileend value to exclude digital signature, otherwise
@@ -1600,9 +1594,15 @@ UNSIGNED32 taggant2_validate_default_hashes_pe(PTAGGANTCONTEXT pCtx, PTAGGANTOBJ
             valid_file = 1;
         }
 
-        if (valid_file && (!uFileEnd || (uFileEnd && fileend <= uFileEnd)) && fileend >= uObjectEnd)
+        /* calculate the object end if needed */
+        if (valid_file && uObjectEnd == 0)
         {
-            if (fileend >= uObjectEnd)
+            objectend = winpe2_object_end(pCtx, hFile, &peh);
+        }
+
+        if (valid_file && (!uFileEnd || (uFileEnd && fileend <= uFileEnd)) && fileend >= objectend)
+        {
+            if (fileend >= objectend)
             {
                 /* Allocate a copy of taggant blob, without hashmap and extrablob buffers */
                 tmphb = pTaggantObj->tagBlob.Hash.FullFile;
@@ -1610,12 +1610,12 @@ UNSIGNED32 taggant2_validate_default_hashes_pe(PTAGGANTCONTEXT pCtx, PTAGGANTOBJ
                 EVP_MD_CTX_init(&evp);
                 EVP_DigestInit_ex(&evp, EVP_sha256(), NULL);
                 /* Compute default hash */
-                if ((res = taggant2_compute_default_hash_pe(&evp, pCtx, &tmphb.DefaultHash, hFile, &peh, uObjectEnd)) == TNOERR)
+                if ((res = taggant2_compute_default_hash_pe(&evp, pCtx, &tmphb.DefaultHash, hFile, &peh, objectend)) == TNOERR)
                 {
                     if ((res = taggant2_compare_default_hash(&pTaggantObj->tagBlob.Hash.FullFile.DefaultHash, &tmphb.DefaultHash)) == TNOERR)
                     {
                         /* Compute extended hash */
-                        if ((res = taggant2_compute_extended_hash_pe(&evp, pCtx, &tmphb.ExtendedHash, hFile, uObjectEnd, fileend)) == TNOERR)
+                        if ((res = taggant2_compute_extended_hash_pe(&evp, pCtx, &tmphb.ExtendedHash, hFile, objectend, fileend)) == TNOERR)
                         {
                             res = taggant2_compare_extended_hash(&pTaggantObj->tagBlob.Hash.FullFile.ExtendedHash, &tmphb.ExtendedHash);
                         }
@@ -1913,7 +1913,8 @@ UNSIGNED32 taggant2_get_timestamp(PTAGGANTOBJ2 pTaggantObj, UNSIGNED64 *pTime, P
         if (tmpbio)
         {
             BIO_write(tmpbio, pTSRootCert, (int)strlen((const char*)pTSRootCert));
-            if ((store = X509_STORE_new()))
+            store = X509_STORE_new();
+            if (store)
             {
                 while ((cert = PEM_read_bio_X509(tmpbio, NULL, 0, NULL)))
                 {
@@ -2249,7 +2250,7 @@ void taggant2_free_taggantobj_content(PTAGGANTOBJ2 pTaggantObj)
     if (pTaggantObj->tagBlob.Extrablob.Data)
     {
         memory_free(pTaggantObj->tagBlob.Extrablob.Data);
-        pTaggantObj->tagBlob.Extrablob.Data = NULL;
+        pTaggantObj->tagBlob.Extrablob.Data = NULL;        
     }
     pTaggantObj->tagBlob.Extrablob.Length = 0;
     /* Free hashmap */				
