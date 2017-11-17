@@ -401,38 +401,28 @@ UNSIGNED32 taggant3_get_pe_seal_info(PTAGGANTCONTEXT pCtx, PFILEOBJECT fp, PE_AL
         /* parse JSON*/
         root = cJSON_Parse(json_seal);
         signed_seal = cJSON_GetObjectItem(root, "signedSeal");
-
-        /**********************************************************************************/
-        /* patch for SRCL C++ native apps */
-        if (!signed_seal)
-        {
-            /* calculate hash */
-            signed_seal_buf = json_seal;
-            SHA256_Init(&sha256);
-            SHA256_Update(&sha256, signed_seal_buf, strlen(signed_seal_buf));
-            SHA256_Final(hash, &sha256);
-            for (i = 0; i < SHA256_DIGEST_LENGTH; i++)
-            {
-                sprintf(str_hash + 2 * i, "%02x", hash[i]);
-            }
-            res = TNOERR;
-        }
-        /**********************************************************************************/
-
         if (signed_seal)
         {
-            /* calculate hash */
+            /* get the signed seal content */
             signed_seal_buf = signed_seal->valuestring;
-            SHA256_Init(&sha256);
-            SHA256_Update(&sha256, signed_seal_buf, strlen(signed_seal_buf));
-            SHA256_Final(hash, &sha256);
-            for (i = 0; i < SHA256_DIGEST_LENGTH; i++)
-            {
-                sprintf(str_hash + 2 * i, "%02x", hash[i]);
-            }
-            res = TNOERR;
         }
+        else
+        {
+            /* assume we have the signed seal content */
+            signed_seal_buf = json_seal;
+        }
+
+        /* calculate hash */
+        SHA256_Init(&sha256);
+        SHA256_Update(&sha256, signed_seal_buf, strlen(signed_seal_buf));
+        SHA256_Final(hash, &sha256);
+        for (i = 0; i < SHA256_DIGEST_LENGTH; i++)
+        {
+            sprintf(str_hash + 2 * i, "%02x", hash[i]);
+        }
+
         memory_free(json_seal);
+        res = TNOERR;
     }
 
     return res;

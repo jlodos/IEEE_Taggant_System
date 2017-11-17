@@ -534,13 +534,8 @@ EXPORT UNSIGNED32 STDCALL TaggantComputeHashes(__in PTAGGANTCONTEXT pCtx, __inou
         /* Check if the file is correct win_pe file */
         if (winpe_is_correct_pe_file(pCtx, hFile, &peh))
         {
-            /* calculate the object end if needed */
-            if (objectend == 0)
-            {
-                objectend = winpe2_object_end(pCtx, hFile, &peh);
-            }
             /* Compute default hash */
-            res = taggant_compute_default_hash(pCtx, &pTaggantObj->tagObj1->pTagBlob->Hash.FullFile, hFile, &peh, objectend, fileend, uTaggantSize);
+            res = taggant_compute_default_hash(pCtx, &pTaggantObj->tagObj1->pTagBlob->Hash.FullFile, hFile, &peh, uObjectEnd, fileend, uTaggantSize);
             if (res == TNOERR && pTaggantObj->tagObj1->pTagBlob->Hash.Hashmap.Entries > 0)
             {
                 /* Compute hashmap */
@@ -639,10 +634,7 @@ EXPORT UNSIGNED32 STDCALL TaggantComputeHashes(__in PTAGGANTCONTEXT pCtx, __inou
             if (winpe_is_correct_pe_file(pCtx, hFile, &peh))
             {
                 /* Get the object end of PE file */
-                if (!objectend)
-                {
-                    objectend = winpe2_object_end(pCtx, hFile, &peh);
-                }
+                objectend = winpe2_object_end(pCtx, hFile, &peh);
                 /* Get the file end excluding existing taggants
                 * Walk through all taggants in file and take offset of the file without taggants
                 * Take offset and size of the latest taggant to include it into hash map
@@ -698,7 +690,7 @@ EXPORT UNSIGNED32 STDCALL TaggantComputeHashes(__in PTAGGANTCONTEXT pCtx, __inou
                     if (res == TNOERR)
                     {
                         /* compute file hashes */
-                        if (fileend >= objectend)
+                        if (fileend >= uObjectEnd)
                         {
                             /* Compute hash */
                             EVP_MD_CTX_init(&evp);

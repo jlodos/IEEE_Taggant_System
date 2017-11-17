@@ -951,7 +951,7 @@ UNSIGNED32 taggant_validate_default_hashes(PTAGGANTCONTEXT pCtx, PTAGGANTOBJ1 pT
     UNSIGNED32 res = TMEMORY;
     HASHBLOB_FULLFILE tmphb;
     UNSIGNED32 ds_offset, ds_size;
-    UNSIGNED64 fileend = uFileEnd, objectend = uObjectEnd;
+    UNSIGNED64 fileend = uFileEnd;
     int valid_ds = 1;
     int valid_file = 0;
     PTAGGANT2 taggant2 = NULL;
@@ -1006,17 +1006,12 @@ UNSIGNED32 taggant_validate_default_hashes(PTAGGANTCONTEXT pCtx, PTAGGANTOBJ1 pT
             valid_file = 1;
         }
     
-        if (valid_file && uObjectEnd == 0)
-        {
-            objectend = winpe2_object_end(pCtx, hFile, &peh);
-        }
-
         if (valid_file && (!uFileEnd || (uFileEnd && fileend <= uFileEnd)))
         {
             /* Allocate a copy of taggant blob */
             tmphb = pTaggantObj->pTagBlob->Hash.FullFile;
             /* Compute default hash */				
-            if ((res = taggant_compute_default_hash(pCtx, &tmphb, hFile, &peh, objectend, fileend, pTaggantObj->uTaggantSize)) == TNOERR)
+            if ((res = taggant_compute_default_hash(pCtx, &tmphb, hFile, &peh, uObjectEnd, fileend, pTaggantObj->uTaggantSize)) == TNOERR)
             {
                 if ((res = taggant_compare_default_hash(&pTaggantObj->pTagBlob->Hash.FullFile.DefaultHash, &tmphb.DefaultHash)) == TNOERR)
                 {

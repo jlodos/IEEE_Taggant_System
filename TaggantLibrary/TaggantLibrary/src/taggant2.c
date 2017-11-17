@@ -1547,7 +1547,7 @@ UNSIGNED32 taggant2_validate_default_hashes_pe(PTAGGANTCONTEXT pCtx, PTAGGANTOBJ
     UNSIGNED32 res = TMEMORY;
     HASHBLOB_FULLFILE tmphb;
     UNSIGNED32 ds_offset, ds_size;
-    UNSIGNED64 fileend = uFileEnd, objectend = uObjectEnd;
+    UNSIGNED64 fileend = uFileEnd;
     EVP_MD_CTX evp;
     int valid_ds = 1;
     int valid_file = 0;
@@ -1594,15 +1594,9 @@ UNSIGNED32 taggant2_validate_default_hashes_pe(PTAGGANTCONTEXT pCtx, PTAGGANTOBJ
             valid_file = 1;
         }
 
-        /* calculate the object end if needed */
-        if (valid_file && uObjectEnd == 0)
+        if (valid_file && (!uFileEnd || (uFileEnd && fileend <= uFileEnd)) && fileend >= uObjectEnd)
         {
-            objectend = winpe2_object_end(pCtx, hFile, &peh);
-        }
-
-        if (valid_file && (!uFileEnd || (uFileEnd && fileend <= uFileEnd)) && fileend >= objectend)
-        {
-            if (fileend >= objectend)
+            if (fileend >= uObjectEnd)
             {
                 /* Allocate a copy of taggant blob, without hashmap and extrablob buffers */
                 tmphb = pTaggantObj->tagBlob.Hash.FullFile;
@@ -1610,12 +1604,12 @@ UNSIGNED32 taggant2_validate_default_hashes_pe(PTAGGANTCONTEXT pCtx, PTAGGANTOBJ
                 EVP_MD_CTX_init(&evp);
                 EVP_DigestInit_ex(&evp, EVP_sha256(), NULL);
                 /* Compute default hash */
-                if ((res = taggant2_compute_default_hash_pe(&evp, pCtx, &tmphb.DefaultHash, hFile, &peh, objectend)) == TNOERR)
+                if ((res = taggant2_compute_default_hash_pe(&evp, pCtx, &tmphb.DefaultHash, hFile, &peh, uObjectEnd)) == TNOERR)
                 {
                     if ((res = taggant2_compare_default_hash(&pTaggantObj->tagBlob.Hash.FullFile.DefaultHash, &tmphb.DefaultHash)) == TNOERR)
                     {
                         /* Compute extended hash */
-                        if ((res = taggant2_compute_extended_hash_pe(&evp, pCtx, &tmphb.ExtendedHash, hFile, objectend, fileend)) == TNOERR)
+                        if ((res = taggant2_compute_extended_hash_pe(&evp, pCtx, &tmphb.ExtendedHash, hFile, uObjectEnd, fileend)) == TNOERR)
                         {
                             res = taggant2_compare_extended_hash(&pTaggantObj->tagBlob.Hash.FullFile.ExtendedHash, &tmphb.ExtendedHash);
                         }
