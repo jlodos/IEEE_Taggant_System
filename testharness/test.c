@@ -6969,6 +6969,7 @@ static int validate_taggant(_In_ const char *filename,
             PHASHBLOB_HASHMAP_DOUBLE doubles;
             UNSIGNED32 size;
             char info;
+            PPACKERINFO packer_info;
 
             size = 0;
 
@@ -7042,7 +7043,18 @@ static int validate_taggant(_In_ const char *filename,
                                             &size,
                                             &info
                                            );
-////                pTaggantPackerInfo()
+                packer_info = pTaggantPackerInfo(object);
+                if (
+                    !packer_info ||
+                    packer_info->PackerId != PACKER_ID ||
+                    packer_info->VersionMajor != PACKER_MAJOR ||
+                    packer_info->VersionMinor != PACKER_MINOR ||
+                    packer_info->VersionBuild != PACKER_BUILD ||
+                    packer_info->Reserved != 0
+                    )
+                {
+                    result = ERR_BADLIB;
+                }
             }
 
             free(tmpfile);
@@ -8491,7 +8503,7 @@ static int test_ssv_024(_In_ const PTAGGANTCONTEXT context,
 {
     int result;
 
-    printf(PR_WIDTH, "(013)testing 32-bit PE file containing good v2 Taggant and good image and tampered overlay:");
+    printf(PR_WIDTH, "(024)testing 32-bit PE file containing good v2 Taggant and good image and tampered overlay:");
 
     result = validate_tampered("v2test09",
                                "vssvtest024",
@@ -11430,7 +11442,7 @@ static int test_ssv_116(_In_ const PTAGGANTCONTEXT context,
                                context,
                                rootdata,
                                TAGGANT_PEFILE,
-                               TNOTAGGANTS
+                               TMISMATCH
                               );
 
     if (result == ERR_NONE)
@@ -11484,7 +11496,7 @@ static int test_ssv_118(_In_ const PTAGGANTCONTEXT context,
                                context,
                                rootdata,
                                TAGGANT_PEFILE,
-                               TNOTAGGANTS
+                               TMISMATCH
                               );
 
     if (result == ERR_NONE)
@@ -12058,7 +12070,7 @@ static int test_ssv_138(_In_ const PTAGGANTCONTEXT context,
         {
             result = ERR_BADLIB;
         }
-        else if (result == TNOTAGGANTS)
+        else if (result == TMISMATCH)
         {
             result = ERR_NONE;
         }
@@ -12117,7 +12129,7 @@ static int test_ssv_139(_In_ const PTAGGANTCONTEXT context,
         {
             result = ERR_BADLIB;
         }
-        else if (result == TNOTAGGANTS)
+		else if (result == TMISMATCH)
         {
             result = ERR_NONE;
         }
