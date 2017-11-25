@@ -1544,20 +1544,20 @@ UNSIGNED32 taggant2_compare_extended_hash(PHASHBLOB_EXTENDED pHash1, PHASHBLOB_E
 UNSIGNED32 taggant2_validate_default_hashes_pe(PTAGGANTCONTEXT pCtx, PTAGGANTOBJ2 pTaggantObj, PFILEOBJECT hFile, UNSIGNED64 uObjectEnd, UNSIGNED64 uFileEnd)
 {
     PE_ALL_HEADERS peh;
-    UNSIGNED32 res = TMEMORY;
+    UNSIGNED32 res = TERROR;
     HASHBLOB_FULLFILE tmphb;
-    UNSIGNED32 ds_offset, ds_size;
-    UNSIGNED64 fileend = uFileEnd;
+    UNSIGNED64 objectend = uObjectEnd, fileend = uFileEnd;
+    UNSIGNED64 ds_offset;
     EVP_MD_CTX evp;
-    int valid_ds = 1;
-    int valid_file = 0;
+    int valid_file = 1;
 
     if (winpe_is_correct_pe_file(pCtx, hFile, &peh))
     {
+        /* If PhysicalEnd value in the taggant = 0 then use file size as PhysicalEnd */
         if (pTaggantObj->tagBlob.Hash.FullFile.ExtendedHash.PhysicalEnd == 0)
         {
             /* if the fileend value is not specified, take the file size */
-            if (!fileend)
+            if (!uFileEnd)
             {
                 fileend = peh.filesize;
             }
@@ -1565,66 +1565,52 @@ UNSIGNED32 taggant2_validate_default_hashes_pe(PTAGGANTCONTEXT pCtx, PTAGGANTOBJ
             * If it is, then reduce fileend value to exclude digital signature, otherwise
             * mark file as there is no taggant
             */
-            if (winpe_is_pe64(&peh))
+            if (taggant_size_after_object_end(pCtx, hFile, &peh, &ds_offset) == peh.filesize) 
             {
-                ds_offset = (UNSIGNED32)peh.oh.pe64.DataDirectory[IMAGE_DIRECTORY_ENTRY_SECURITY].VirtualAddress;
-                ds_size = (UNSIGNED32)peh.oh.pe64.DataDirectory[IMAGE_DIRECTORY_ENTRY_SECURITY].Size;
+                valid_file = 0;
             }
             else
             {
-                ds_offset = (UNSIGNED32)peh.oh.pe32.DataDirectory[IMAGE_DIRECTORY_ENTRY_SECURITY].VirtualAddress;
-                ds_size = (UNSIGNED32)peh.oh.pe32.DataDirectory[IMAGE_DIRECTORY_ENTRY_SECURITY].Size;
+                fileend -= ds_offset ? (peh.filesize - ds_offset) : 0;
             }
-            if (ds_offset != 0 && ds_size != 0)
-            {
-                if ((ds_offset + ds_size) != fileend)
-                {
-                    valid_ds = 0;
-                }
-                else
-                {
-                    fileend -= ds_size;
-                }
-            }
-            valid_file = valid_ds;
         }
         else
         {
             fileend = pTaggantObj->tagBlob.Hash.FullFile.ExtendedHash.PhysicalEnd;
-            valid_file = 1;
         }
-
-        if (valid_file && (!uFileEnd || (uFileEnd && fileend <= uFileEnd)) && fileend >= uObjectEnd)
+        /* calculate the object end if needed */
+        if (valid_file && uObjectEnd == 0)
         {
-            if (fileend >= uObjectEnd)
+            objectend = winpe2_object_end(pCtx, hFile, &peh);
+            if (fileend != peh.filesize)
             {
-                /* Allocate a copy of taggant blob, without hashmap and extrablob buffers */
-                tmphb = pTaggantObj->tagBlob.Hash.FullFile;
-                /* Compute hash */
-                EVP_MD_CTX_init(&evp);
-                EVP_DigestInit_ex(&evp, EVP_sha256(), NULL);
-                /* Compute default hash */
-                if ((res = taggant2_compute_default_hash_pe(&evp, pCtx, &tmphb.DefaultHash, hFile, &peh, uObjectEnd)) == TNOERR)
+                /* There are taggants and/or a valid signature or just overlay.
+                   It is possible the taggant was added to a file with a length
+                   less than the expected because of last section alignment. */
+                valid_file = taggant_fix_object_end(pCtx, hFile, &peh, fileend, &objectend);
+            }
+        }
+        if (valid_file && (!uFileEnd || (uFileEnd && fileend <= uFileEnd)) && fileend >= objectend)
+        {
+            /* Make a copy of taggant blob, without hashmap and extrablob buffers */
+            tmphb = pTaggantObj->tagBlob.Hash.FullFile;
+            /* Compute hash */
+            EVP_MD_CTX_init(&evp);
+            EVP_DigestInit_ex(&evp, EVP_sha256(), NULL);
+            /* Compute default hash */
+            if ((res = taggant2_compute_default_hash_pe(&evp, pCtx, &tmphb.DefaultHash, hFile, &peh, objectend)) == TNOERR)
+            {
+                if ((res = taggant2_compare_default_hash(&pTaggantObj->tagBlob.Hash.FullFile.DefaultHash, &tmphb.DefaultHash)) == TNOERR)
                 {
-                    if ((res = taggant2_compare_default_hash(&pTaggantObj->tagBlob.Hash.FullFile.DefaultHash, &tmphb.DefaultHash)) == TNOERR)
+                    /* Compute extended hash */
+                    if ((res = taggant2_compute_extended_hash_pe(&evp, pCtx, &tmphb.ExtendedHash, hFile, objectend, fileend)) == TNOERR)
                     {
-                        /* Compute extended hash */
-                        if ((res = taggant2_compute_extended_hash_pe(&evp, pCtx, &tmphb.ExtendedHash, hFile, uObjectEnd, fileend)) == TNOERR)
-                        {
-                            res = taggant2_compare_extended_hash(&pTaggantObj->tagBlob.Hash.FullFile.ExtendedHash, &tmphb.ExtendedHash);
-                        }
+                        res = taggant2_compare_extended_hash(&pTaggantObj->tagBlob.Hash.FullFile.ExtendedHash, &tmphb.ExtendedHash);
                     }
                 }
-                /* Clean hash context */
-                EVP_MD_CTX_cleanup(&evp);
             }
-            else
-            {
-                res = TFILEERROR;
-            }
-        } else
-        {
-            res = TERROR;
+            /* Clean hash context */
+            EVP_MD_CTX_cleanup(&evp);
         }
     } else
     {

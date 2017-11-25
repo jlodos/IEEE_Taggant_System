@@ -83,6 +83,8 @@ UNSIGNED32 taggant_validate_default_hashes(PTAGGANTCONTEXT pCtx, PTAGGANTOBJ1 pT
 UNSIGNED32 taggant_validate_hashmap(PTAGGANTCONTEXT pCtx, PTAGGANTOBJ1 pTaggantObj, PFILEOBJECT hFile);
 UNSIGNED32 taggant_get_timestamp(PTAGGANTOBJ1 pTaggantObj, UNSIGNED64 *pTime, PVOID pTSRootCert);
 UNSIGNED32 taggant_get_info(PTAGGANTOBJ1 pTaggantObj, ENUMTAGINFO eKey, UNSIGNED32 *pSize, PINFO pInfo);
+UNSIGNED64 taggant_size_after_object_end(PTAGGANTCONTEXT pCtx, PFILEOBJECT hFile, PE_ALL_HEADERS *peh, UNSIGNED64* ds_offset);
+int taggant_fix_object_end(PTAGGANTCONTEXT pCtx, PFILEOBJECT hFile, PE_ALL_HEADERS *peh, UNSIGNED64 fileend, UNSIGNED64* objectend);
 #endif
 
 #ifdef SPV_LIBRARY

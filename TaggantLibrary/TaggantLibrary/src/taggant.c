@@ -333,9 +333,11 @@ UNSIGNED32 taggant_compute_default_hash(PTAGGANTCONTEXT pCtx, PHASHBLOB_FULLFILE
         fileend = peh->filesize;
     }
 
+    /* Check if the end of physical file is less then end of PE file */
     if (fileend < uObjectEnd)
     {
-        return TFILEERROR;
+        /* for cases where the last section is completed in memory because of the alignment */
+        uObjectEnd = fileend;
     }
 
     /* Calculate default hash */
@@ -948,13 +950,11 @@ UNSIGNED32 taggant_compare_extended_hash(PHASHBLOB_EXTENDED pHash1, PHASHBLOB_EX
 UNSIGNED32 taggant_validate_default_hashes(PTAGGANTCONTEXT pCtx, PTAGGANTOBJ1 pTaggantObj, PFILEOBJECT hFile, UNSIGNED64 uObjectEnd, UNSIGNED64 uFileEnd)
 {
     PE_ALL_HEADERS peh;
-    UNSIGNED32 res = TMEMORY;
+    UNSIGNED32 res = TFILEERROR;
     HASHBLOB_FULLFILE tmphb;
-    UNSIGNED32 ds_offset, ds_size;
-    UNSIGNED64 fileend = uFileEnd;
-    int valid_ds = 1;
-    int valid_file = 0;
-    PTAGGANT2 taggant2 = NULL;
+    UNSIGNED64 objectend = uObjectEnd, fileend = uFileEnd;
+    UNSIGNED64 ds_offset, size_after_object_end;
+    int valid_file = 1;
 
     if (winpe_is_correct_pe_file(pCtx, hFile, &peh))
     {
@@ -962,65 +962,52 @@ UNSIGNED32 taggant_validate_default_hashes(PTAGGANTCONTEXT pCtx, PTAGGANTOBJ1 pT
         if (pTaggantObj->pTagBlob->Hash.FullFile.ExtendedHash.PhysicalEnd == 0)
         {       
             /* if the fileend value is not specified, take the file size */
-            if (!fileend)
+            if (!uFileEnd)
             {
                 fileend = peh.filesize;
             }
             /* Check if the file contains digital signature and if it is placed at the end of the file
-             * If it is, then reduce fileend value to exclude digital signature, otherwise
-             * mark file as there is no taggant
-             */
-            if (winpe_is_pe64(&peh))
+            * If it is, then reduce fileend value to exclude digital signature, otherwise
+            * mark file as there is no taggant
+            */
+            size_after_object_end = taggant_size_after_object_end(pCtx, hFile, &peh, &ds_offset); 
+            if (size_after_object_end == peh.filesize) 
             {
-                ds_offset = (UNSIGNED32)peh.oh.pe64.DataDirectory[IMAGE_DIRECTORY_ENTRY_SECURITY].VirtualAddress;
-                ds_size = (UNSIGNED32)peh.oh.pe64.DataDirectory[IMAGE_DIRECTORY_ENTRY_SECURITY].Size;
-            } else
-            {
-                ds_offset = (UNSIGNED32)peh.oh.pe32.DataDirectory[IMAGE_DIRECTORY_ENTRY_SECURITY].VirtualAddress;
-                ds_size = (UNSIGNED32)peh.oh.pe32.DataDirectory[IMAGE_DIRECTORY_ENTRY_SECURITY].Size;
+                valid_file = 0;
             }
-            if (ds_offset != 0 && ds_size != 0)
+            else
             {
-                if ((ds_offset + ds_size) != fileend)
-                {
-                    valid_ds = 0;
-                } else
-                {
-                    fileend -= ds_size;
-                }
+                fileend -= size_after_object_end;
             }
-            valid_file = valid_ds;
-            /* exclude taggant v2 */
-            if (valid_file)
-            {
-                while (taggant2_read_binary(pCtx, hFile, fileend, &taggant2, TAGGANT_PEFILE) == TNOERR)
-                {
-                    fileend -= taggant2->Header.TaggantLength;
-                    /* Free the taggant object */
-                    taggant2_free_taggant(taggant2);
-                }
-            }
-        } else
+        }
+        else
         {
             fileend = pTaggantObj->pTagBlob->Hash.FullFile.ExtendedHash.PhysicalEnd;
-            valid_file = 1;
         }
-    
-        if (valid_file && (!uFileEnd || (uFileEnd && fileend <= uFileEnd)))
+        /* calculate the object end if needed */
+        if (valid_file && uObjectEnd == 0)
         {
-            /* Allocate a copy of taggant blob */
+            objectend = winpe2_object_end(pCtx, hFile, &peh);
+            if (fileend != peh.filesize)
+            {
+                /* There are taggants and/or a valid signature or just overlay.
+                    It is possible the taggant was added to a file with a length
+                    less than the expected because of last section alignment. */
+                valid_file = taggant_fix_object_end(pCtx, hFile, &peh, fileend, &objectend);
+            }
+        }
+        if (valid_file && (!uFileEnd || (uFileEnd && fileend <= uFileEnd)) && fileend >= objectend)
+        {
+            /* Make a copy of taggant blob */
             tmphb = pTaggantObj->pTagBlob->Hash.FullFile;
             /* Compute default hash */				
-            if ((res = taggant_compute_default_hash(pCtx, &tmphb, hFile, &peh, uObjectEnd, fileend, pTaggantObj->uTaggantSize)) == TNOERR)
+            if ((res = taggant_compute_default_hash(pCtx, &tmphb, hFile, &peh, objectend, fileend, pTaggantObj->uTaggantSize)) == TNOERR)
             {
                 if ((res = taggant_compare_default_hash(&pTaggantObj->pTagBlob->Hash.FullFile.DefaultHash, &tmphb.DefaultHash)) == TNOERR)
                 {
                     res = taggant_compare_extended_hash(&pTaggantObj->pTagBlob->Hash.FullFile.ExtendedHash, &tmphb.ExtendedHash);
                 }
             }
-        } else
-        {
-            res = TERROR;
         }
     } else
     {
@@ -1306,6 +1293,96 @@ UNSIGNED32 taggant_get_info(PTAGGANTOBJ1 pTaggantObj, ENUMTAGINFO eKey, UNSIGNED
         *pSize = sizeof(PACKERINFO);
         break;
     }	
+    return res;
+}
+
+UNSIGNED64 taggant_size_after_object_end(PTAGGANTCONTEXT pCtx, PFILEOBJECT hFile, PE_ALL_HEADERS *peh, UNSIGNED64* ds_offset)
+{
+    UNSIGNED64 objectend = peh->filesize;
+    UNSIGNED32 ds_size;
+    int ds_padding = -1;
+    char buf[7];
+	PTAGGANT2 taggant2 = NULL;
+    int taggant_found = 0;
+
+    /* Check if the file contains digital signature and if it is placed at the end of the file
+        * If it is, then reduce fileend value to exclude digital signature.
+        */
+    if (winpe_is_pe64(peh))
+    {
+        *ds_offset = peh->oh.pe64.DataDirectory[IMAGE_DIRECTORY_ENTRY_SECURITY].VirtualAddress;
+        ds_size = peh->oh.pe64.DataDirectory[IMAGE_DIRECTORY_ENTRY_SECURITY].Size;
+    }
+    else
+    {
+        *ds_offset = peh->oh.pe32.DataDirectory[IMAGE_DIRECTORY_ENTRY_SECURITY].VirtualAddress;
+        ds_size = peh->oh.pe32.DataDirectory[IMAGE_DIRECTORY_ENTRY_SECURITY].Size;
+    }
+    if (*ds_offset != 0 && ds_size != 0)
+    {
+        if ((*ds_offset + ds_size) != peh->filesize)
+        {
+            objectend = 0;
+        }
+        else
+        {
+            objectend -= ds_size;
+            /* check padding to 8 byte boundary as per PE/COFF specification */
+            if (file_seek(pCtx, hFile, objectend - sizeof(buf), SEEK_SET) && file_read_buffer(pCtx, hFile, buf, sizeof(buf)))
+            {
+                for (ds_padding = sizeof(buf) - 1; ds_padding >= 0 && !buf[ds_padding]; ds_padding--); /* exclude 0s to align assuming there is a taggant */
+                if (ds_padding >= 0)
+                {
+                    ds_padding = sizeof(buf) - 1 - ds_padding;
+					objectend -= ds_padding; /* possible taggant end */
+                    *ds_offset -= ds_padding; /* the digital signature offset returned includes the padding */
+                }
+            }
+        }
+    }
+    if (objectend)
+    {
+        /* exclude v2 taggants */
+        while (taggant2_read_binary(pCtx, hFile, objectend, &taggant2, TAGGANT_PEFILE) == TNOERR)
+        {
+            taggant_found = 1;
+            objectend -= taggant2->Header.TaggantLength;
+            taggant2_free_taggant(taggant2);
+        }
+    }
+    if (!taggant_found && ds_padding >= 0)
+    {
+        /* restore signature position */
+		objectend += ds_padding;
+        *ds_offset += ds_padding;
+    }
+    return peh->filesize - objectend;
+}
+
+int taggant_fix_object_end(PTAGGANTCONTEXT pCtx, PFILEOBJECT hFile, PE_ALL_HEADERS *peh, UNSIGNED64 fileend, UNSIGNED64* objectend)
+{
+    int res;
+    UNSIGNED64 size_after_object_end, ds_offset;
+
+    /* There are taggants and/or a valid signature or just overlay.
+        It is possible the taggant was added to a file with a length
+        less than the expected because of last section alignment. */
+    size_after_object_end = taggant_size_after_object_end(pCtx, hFile, peh, &ds_offset);
+    res = size_after_object_end != peh->filesize;
+    if (size_after_object_end == 0)
+    {
+        /* No signature nor v2 taggants at the end */
+        if (*objectend > fileend)
+        {
+            /* could happen if last section alignment causes padding in memory */
+            *objectend = fileend;
+        }
+    }
+    if (res && *objectend > peh->filesize - size_after_object_end)
+    {
+        /* could happen if last section alignment causes padding in memory */
+        *objectend = peh->filesize - size_after_object_end;
+    }
     return res;
 }
 

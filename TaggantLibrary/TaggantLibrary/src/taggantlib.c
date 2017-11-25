@@ -188,7 +188,7 @@ EXPORT void STDCALL TaggantFreeTaggant(__deref PTAGGANT pTaggant)
 
 EXPORT UNSIGNED32 STDCALL TaggantGetTaggant(__in PTAGGANTCONTEXT pCtx, __in PFILEOBJECT hFile, TAGGANTCONTAINER eContainer, __inout PTAGGANT *pTaggant)
 {
-    UNSIGNED32 res = TNOERR, v1res = TNOERR;
+    UNSIGNED32 res = TNOERR;
     PTAGGANT taggant;
     /* the current file position to check for a next taggant */
     UNSIGNED64 fileend;
@@ -196,10 +196,8 @@ EXPORT UNSIGNED32 STDCALL TaggantGetTaggant(__in PTAGGANTCONTEXT pCtx, __in PFIL
     UNSIGNED64 ffhend;
     UNSIGNED64 dsoffset;
     PE_ALL_HEADERS peh;
-    UNSIGNED32 ds_offset, ds_size;
     PTAGGANT2 taggant2;
-    int i, err, stoploop = 0;
-    char buf[7];
+    int err, stoploop = 0;
 
     if (!lib_initialized)
     {
@@ -303,43 +301,10 @@ EXPORT UNSIGNED32 STDCALL TaggantGetTaggant(__in PTAGGANTCONTEXT pCtx, __in PFIL
                     if (!err)
                     {
                         /* PE file */
-                        fileend = peh.filesize;
-                        ffhend = fileend;
-                        /* exclude digital signature */
-                        if (winpe_is_pe64(&peh))
+                        ffhend = peh.filesize - taggant_size_after_object_end(pCtx, hFile, &peh, &fileend);
+                        if (!fileend)
                         {
-                            ds_offset = peh.oh.pe64.DataDirectory[IMAGE_DIRECTORY_ENTRY_SECURITY].VirtualAddress;
-                            ds_size = peh.oh.pe64.DataDirectory[IMAGE_DIRECTORY_ENTRY_SECURITY].Size;
-                        }
-                        else
-                        {
-                            ds_offset = peh.oh.pe32.DataDirectory[IMAGE_DIRECTORY_ENTRY_SECURITY].VirtualAddress;
-                            ds_size = peh.oh.pe32.DataDirectory[IMAGE_DIRECTORY_ENTRY_SECURITY].Size;
-                        }
-                        if (ds_offset != 0 && ds_size != 0)
-                        {
-                            if ((ds_offset + ds_size) == fileend)
-                            {
-                                fileend -= ds_size;
-                                /* check padding to 8 byte boundary as per PE/COFF specification */
-                                if (file_seek(pCtx, hFile, fileend - sizeof(buf), SEEK_SET) && file_read_buffer(pCtx, hFile, buf, sizeof(buf)))
-                                {
-                                    for (i = sizeof(buf) - 1; i >= 0 && !buf[i]; i--)
-                                    {
-                                        --fileend;
-                                    }
-                                }
-                                ffhend = fileend;
-                            }
-                        }
-                        while (
-                            taggant2_read_binary(pCtx, hFile, ffhend, &taggant2, TAGGANT_PESEALFILE) == TNOERR ||
-                            taggant2_read_binary(pCtx, hFile, ffhend, &taggant2, TAGGANT_PEFILE) == TNOERR
-                            )
-                        {
-                            ffhend -= taggant2->Header.TaggantLength;
-                            /* Free the taggant object */
-                            taggant2_free_taggant(taggant2);
+                            fileend = peh.filesize;
                         }
                     }
                     else
@@ -458,10 +423,9 @@ EXPORT UNSIGNED32 STDCALL TaggantGetTaggant(__in PTAGGANTCONTEXT pCtx, __in PFIL
                 if (!err)
                 {
                     /* keep the original error if v1 fails */
-                    v1res = taggant_read_from_pe(pCtx, hFile, &peh, &taggant->pTag1);
-                    if (v1res == TNOERR)
+                    if (taggant_read_from_pe(pCtx, hFile, &peh, &taggant->pTag1) == TNOERR)
                     {
-                        res = v1res;
+                        res = TNOERR;
                     }
                 }
             }
@@ -534,8 +498,13 @@ EXPORT UNSIGNED32 STDCALL TaggantComputeHashes(__in PTAGGANTCONTEXT pCtx, __inou
         /* Check if the file is correct win_pe file */
         if (winpe_is_correct_pe_file(pCtx, hFile, &peh))
         {
+            /* calculate the object end if needed */
+            if (objectend == 0)
+            {
+                objectend = winpe2_object_end(pCtx, hFile, &peh);
+            }
             /* Compute default hash */
-            res = taggant_compute_default_hash(pCtx, &pTaggantObj->tagObj1->pTagBlob->Hash.FullFile, hFile, &peh, uObjectEnd, fileend, uTaggantSize);
+            res = taggant_compute_default_hash(pCtx, &pTaggantObj->tagObj1->pTagBlob->Hash.FullFile, hFile, &peh, objectend, fileend, uTaggantSize);
             if (res == TNOERR && pTaggantObj->tagObj1->pTagBlob->Hash.Hashmap.Entries > 0)
             {
                 /* Compute hashmap */
@@ -633,8 +602,6 @@ EXPORT UNSIGNED32 STDCALL TaggantComputeHashes(__in PTAGGANTCONTEXT pCtx, __inou
             /* Assume it is PE file and make sure it is correct */
             if (winpe_is_correct_pe_file(pCtx, hFile, &peh))
             {
-                /* Get the object end of PE file */
-                objectend = winpe2_object_end(pCtx, hFile, &peh);
                 /* Get the file end excluding existing taggants
                 * Walk through all taggants in file and take offset of the file without taggants
                 * Take offset and size of the latest taggant to include it into hash map
@@ -689,8 +656,20 @@ EXPORT UNSIGNED32 STDCALL TaggantComputeHashes(__in PTAGGANTCONTEXT pCtx, __inou
                     }
                     if (res == TNOERR)
                     {
+                        /* Get the object end of PE file */
+                        if (!objectend)
+                        {
+                            objectend = winpe2_object_end(pCtx, hFile, &peh);
+                            if (found && objectend > fileend)
+                            {
+                                /* There were was at least a taggant.
+                                   It is possible the taggant was added to a file with a length
+                                   less than the expected because of last section alignment. */
+                                objectend = fileend;
+                            }
+                        }
                         /* compute file hashes */
-                        if (fileend >= uObjectEnd)
+                        if (fileend >= objectend)
                         {
                             /* Compute hash */
                             EVP_MD_CTX_init(&evp);

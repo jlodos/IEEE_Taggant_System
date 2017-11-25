@@ -111,6 +111,11 @@ UNSIGNED64 winpe2_object_end(PTAGGANTCONTEXT pCtx, PFILEOBJECT fp, PE_ALL_HEADER
                     break;
                 }
             }
+            if (res > peh->filesize)
+            {
+                /* could happen if last section alignment causes padding in memory */
+                res = peh->filesize;
+            }
         }
     }
     return res;
