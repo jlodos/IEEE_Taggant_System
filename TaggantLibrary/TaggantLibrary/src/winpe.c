@@ -231,16 +231,13 @@ int winpe_taggant_physical_offset(PTAGGANTCONTEXT pCtx, PFILEOBJECT fp, PE_ALL_H
         {
             if (jmpcode == TAGGANT_ADDRESS_JMP)
             {
-                if (file_seek(pCtx, fp, ep_physical_offset + sizeof(UNSIGNED16), SEEK_SET))
+                if (file_read_UNSIGNED64(pCtx, fp, &offset))
                 {
-                    if (file_read_UNSIGNED64(pCtx, fp, &offset))
+                    /* Check if the taggant offset points to the area after headers */
+                    if (offset >= winpe_header_size(peh))
                     {
-                        /* Check if the taggant offset points to the area after headers */
-                        if (offset >= winpe_header_size(peh))
-                        {
-                            *tag_offset = offset;
-                            return 1;
-                        }
+                        *tag_offset = offset;
+                        return 1;
                     }
                 }
             }

@@ -996,16 +996,20 @@ UNSIGNED32 taggant_validate_default_hashes(PTAGGANTCONTEXT pCtx, PTAGGANTOBJ1 pT
                 valid_file = taggant_fix_object_end(pCtx, hFile, &peh, fileend, &objectend);
             }
         }
-        if (valid_file && (!uFileEnd || (uFileEnd && fileend <= uFileEnd)) && fileend >= objectend)
+        if (valid_file)
         {
-            /* Make a copy of taggant blob */
-            tmphb = pTaggantObj->pTagBlob->Hash.FullFile;
-            /* Compute default hash */				
-            if ((res = taggant_compute_default_hash(pCtx, &tmphb, hFile, &peh, objectend, fileend, pTaggantObj->uTaggantSize)) == TNOERR)
+            res = TMISMATCH;
+            if ((!uFileEnd || (uFileEnd && fileend <= uFileEnd)) && fileend >= objectend)
             {
-                if ((res = taggant_compare_default_hash(&pTaggantObj->pTagBlob->Hash.FullFile.DefaultHash, &tmphb.DefaultHash)) == TNOERR)
+                /* Make a copy of taggant blob */
+                tmphb = pTaggantObj->pTagBlob->Hash.FullFile;
+                /* Compute default hash */				
+                if ((res = taggant_compute_default_hash(pCtx, &tmphb, hFile, &peh, objectend, fileend, pTaggantObj->uTaggantSize)) == TNOERR)
                 {
-                    res = taggant_compare_extended_hash(&pTaggantObj->pTagBlob->Hash.FullFile.ExtendedHash, &tmphb.ExtendedHash);
+                    if ((res = taggant_compare_default_hash(&pTaggantObj->pTagBlob->Hash.FullFile.DefaultHash, &tmphb.DefaultHash)) == TNOERR)
+                    {
+                        res = taggant_compare_extended_hash(&pTaggantObj->pTagBlob->Hash.FullFile.ExtendedHash, &tmphb.ExtendedHash);
+                    }
                 }
             }
         }
@@ -1298,11 +1302,12 @@ UNSIGNED32 taggant_get_info(PTAGGANTOBJ1 pTaggantObj, ENUMTAGINFO eKey, UNSIGNED
 
 UNSIGNED64 taggant_size_after_object_end(PTAGGANTCONTEXT pCtx, PFILEOBJECT hFile, PE_ALL_HEADERS *peh, UNSIGNED64* ds_offset)
 {
-    UNSIGNED64 objectend = peh->filesize;
+    UNSIGNED64 imagesize, objectend = peh->filesize;
     UNSIGNED32 ds_size;
     int ds_padding = -1;
     char buf[7];
-	PTAGGANT2 taggant2 = NULL;
+    PTAGGANT1 taggant1 = NULL;
+    PTAGGANT2 taggant2 = NULL;
     int taggant_found = 0;
 
     /* Check if the file contains digital signature and if it is placed at the end of the file
@@ -1334,7 +1339,7 @@ UNSIGNED64 taggant_size_after_object_end(PTAGGANTCONTEXT pCtx, PFILEOBJECT hFile
                 if (ds_padding >= 0)
                 {
                     ds_padding = sizeof(buf) - 1 - ds_padding;
-					objectend -= ds_padding; /* possible taggant end */
+                    objectend -= ds_padding; /* possible taggant end */
                     *ds_offset -= ds_padding; /* the digital signature offset returned includes the padding */
                 }
             }
@@ -1349,11 +1354,27 @@ UNSIGNED64 taggant_size_after_object_end(PTAGGANTCONTEXT pCtx, PFILEOBJECT hFile
             objectend -= taggant2->Header.TaggantLength;
             taggant2_free_taggant(taggant2);
         }
+        /* exclude v1 taggant */
+        if (taggant_read_from_pe(pCtx, hFile, peh, &taggant1) == TNOERR)
+        {
+            if (objectend == taggant1->offset + taggant1->Header.TaggantLength)
+            {
+                /* the v1 taggant was at the end of the file */
+                imagesize = winpe2_object_end(pCtx, hFile, peh);
+                if (objectend > imagesize && taggant1->offset < imagesize)
+                {
+                    /* the v1 taggant is outside the sections, but started withim them */
+                    taggant_found = 1;
+                    objectend -= taggant1->Header.TaggantLength;
+                }
+            }
+            taggant_free_taggant(taggant1);
+        }
     }
     if (!taggant_found && ds_padding >= 0)
     {
         /* restore signature position */
-		objectend += ds_padding;
+        objectend += ds_padding;
         *ds_offset += ds_padding;
     }
     return peh->filesize - objectend;

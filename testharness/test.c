@@ -79,14 +79,73 @@
 //#define SKIP_CREATE
 //#define KEEP_FILES
 
-// from types.h
+/* from types.h */
+#define TAGGANT_VERSION1 1
+#define TAGGANT_VERSION2 2
+#define TAGGANT_VERSION3 3
+#define TAGGANT_MARKER_BEGIN 0x47474154 /* 'T'A'G'G' */
+#define TAGGANT_MARKER_END 0x53544E41   /* 'A'N'T'S' */
+
+#pragma pack(push,2)
+
+typedef struct
+{
+    UNSIGNED16 Length;
+    /* not implemented in the current specification
+    char Data[0]; */
+} EXTRABLOB, *PEXTRABLOB;
+
+typedef struct
+{	
+    UNSIGNED32 MarkerBegin;
+    UNSIGNED32 TaggantLength;
+    UNSIGNED32 CMSLength;
+    UNSIGNED16 Version;
+} TAGGANT_HEADER, *PTAGGANT_HEADER;
+
 typedef struct
 {	
     UNSIGNED16 Version;
     UNSIGNED32 CMSLength;
     UNSIGNED32 TaggantLength;
     UNSIGNED32 MarkerBegin;
-} TAGGANT_HEADER2;
+} TAGGANT_HEADER2, *PTAGGANT_HEADER2;
+
+typedef struct
+{
+    EXTRABLOB Extrablob;
+    UNSIGNED32 MarkerEnd;
+} TAGGANT_FOOTER, *PTAGGANT_FOOTER;
+
+typedef struct
+{
+    UNSIGNED32 MarkerEnd;
+} TAGGANT_FOOTER2, *PTAGGANT_FOOTER2;
+
+typedef struct
+{
+    /* taggant offset from the beginning of the file */
+    UNSIGNED64 offset;
+    TAGGANT_HEADER Header;
+    PVOID CMSBuffer;
+    TAGGANT_FOOTER Footer;
+} TAGGANT1, *PTAGGANT1;
+
+typedef struct
+{
+    TAGGANT_HEADER2 Header;
+    PVOID CMSBuffer;
+    UNSIGNED32 CMSBufferSize;
+    TAGGANT_FOOTER2 Footer;
+    /* the current file position to check for a next taggant */
+    UNSIGNED64 fileend;
+    /* end of full file hash, the size of the file without taggants */
+    UNSIGNED64 ffhend;
+    /* type of the file currently processed */
+    TAGGANTCONTAINER tagganttype;
+} TAGGANT2, *PTAGGANT2;
+
+#pragma pack(pop)
 
 #define PACKER_ID 3141592653
 #define PACKER_MAJOR 1234
@@ -242,7 +301,7 @@ static void print_tagerr(int err)
             printf("no connection to the internet\n");
             break;
         }
-/*////
+
         case TTIMEOUT:
         {
             printf("the timestamp authority server response time has expired\n");
@@ -260,7 +319,7 @@ static void print_tagerr(int err)
             printf("the timestamp authority server returned an error\n");
             break;
         }
-*/
+
         case TERROR:
         {
             printf("TAGGANTOBJ does not contain the TAGGANTBLOB structure\n");
@@ -712,7 +771,396 @@ static int read_data_file(_In_z_ const char *filename,
                           )
 #endif
 
-static UNSIGNED32 virttophys(UNSIGNED64 pefile_len,
+void taggant_free_taggant(PTAGGANT1 pTaggant)
+{
+    /* Make sure taggant object is not null */
+    if (pTaggant)
+    {
+        if (pTaggant->CMSBuffer)
+        {
+            free(pTaggant->CMSBuffer);
+        }
+        free(pTaggant);
+    }
+}
+
+void taggant2_free_taggant(PTAGGANT2 pTaggant)
+{
+    /* Make sure taggant object is not null */
+    if (pTaggant)
+    {
+        if (pTaggant->CMSBuffer)
+        {
+            free(pTaggant->CMSBuffer);
+        }
+        free(pTaggant);
+    }
+}
+
+static UNSIGNED32 virttophys(const UNSIGNED8 *pefile, UNSIGNED64 pefile_len,
+                             _In_reads_(sectcount) const IMAGE_SECTION_HEADER *secttbl,
+                             unsigned int sectcount,
+                             UNSIGNED32 virtoff,
+                             UNSIGNED32 filealign,
+                             _Out_writes_(1) UNSIGNED64 *imagesize
+                            );
+
+UNSIGNED32 taggant_read_from_pe(const UNSIGNED8 *pefile, UNSIGNED64 pefile_len, PTAGGANT1 *pTaggant)
+{
+    UNSIGNED32 res = TNOTAGGANTS;
+    UNSIGNED32 lfanew;
+    unsigned int sectcount;
+    IMAGE_SECTION_HEADER *secttbl;
+    UNSIGNED32 epoffset;
+    UNSIGNED16 jmpcode;
+    UNSIGNED64 taggantoffset;
+    PTAGGANT1 tagbuf = NULL;
+    UNSIGNED32 tagsize;
+
+    if (pefile_len < sizeof(IMAGE_DOS_HEADER))
+    {
+        return TINVALIDPEENTRYPOINT;
+    }
+
+    if ((read_le16(pefile) != IMAGE_DOS_SIGNATURE)
+     || (pefile_len < ((lfanew = read_le32(pefile + offsetof(IMAGE_DOS_HEADER,
+                                                             e_lfanew
+                                                            )
+                                          )
+                       ) + offsetof(IMAGE_NT_HEADERS32,
+                                    OptionalHeader
+                                   )
+                         + offsetof(IMAGE_OPTIONAL_HEADER32,
+                                    BaseOfCode
+                                   )
+                      )
+        )
+     || (read_le32(pefile + lfanew) != IMAGE_NT_SIGNATURE)
+       )
+    {
+        return TINVALIDPEENTRYPOINT;
+    }
+
+    epoffset = read_le32(pefile + lfanew + offsetof(IMAGE_NT_HEADERS32,
+                                                      OptionalHeader
+                                                     )
+                                           + offsetof(IMAGE_OPTIONAL_HEADER32,
+                                                      AddressOfEntryPoint
+                                                     )
+                          );
+
+    if ((sectcount = read_le16(pefile + lfanew + offsetof(IMAGE_NT_HEADERS32,
+                                                          FileHeader
+                                                         )
+                                               + offsetof(IMAGE_FILE_HEADER,
+                                                          NumberOfSections
+                                                         )
+                              )
+        ) != 0
+       )
+    {
+        unsigned int optsize;
+        UNSIGNED64 imagesize;
+
+        if (pefile_len < (lfanew + offsetof(IMAGE_NT_HEADERS32,
+                                            OptionalHeader
+                                           ) + (optsize = read_le16(pefile + lfanew + offsetof(IMAGE_NT_HEADERS32,
+                                                                                               FileHeader
+                                                                                              )
+                                                                                    + offsetof(IMAGE_FILE_HEADER,
+                                                                                               SizeOfOptionalHeader
+                                                                                              )
+                                                                   )
+                                               ) + (sectcount * sizeof(IMAGE_SECTION_HEADER))
+                         )
+           )
+        {
+            return TINVALIDPEENTRYPOINT;
+        }
+
+        if ((epoffset = virttophys(pefile, pefile_len,
+                                     secttbl = (IMAGE_SECTION_HEADER *) (pefile + lfanew + offsetof(IMAGE_NT_HEADERS32,
+                                                                                                    OptionalHeader
+                                                                                                   ) + optsize
+                                                                        ),
+                                     sectcount,
+                                     epoffset,
+                                     read_le32(pefile + lfanew + offsetof(IMAGE_NT_HEADERS32,
+                                                                          OptionalHeader
+                                                                         )
+                                                               + offsetof(IMAGE_OPTIONAL_HEADER32,
+                                                                          FileAlignment
+                                                                         )
+                                              ),
+                                     &imagesize
+                                    )
+            ) == -1
+           )
+        {
+            return TINVALIDPEENTRYPOINT;
+        }
+    }
+
+    /* read 2 bytes from file entry point */
+    if (epoffset + sizeof(UNSIGNED16) + sizeof(UNSIGNED64) > pefile_len)
+    {
+        return TINVALIDPEENTRYPOINT;
+    }
+    memcpy(&jmpcode, pefile + epoffset, sizeof(UNSIGNED16));
+#ifdef BIG_ENDIAN
+    jmpcode = read_le16(&jmpcode);
+#endif
+    if (jmpcode != TAGGANT_ADDRESS_JMP)
+    {
+        return TINVALIDTAGGANTOFFSET;
+    }
+    memcpy(&taggantoffset, pefile + epoffset + sizeof(UNSIGNED16), sizeof(UNSIGNED64));
+#ifdef BIG_ENDIAN
+    taggant_offset = read_le64(&taggant_offset);
+#endif
+
+    /* seek from the file begin to the taggant */
+    if (taggantoffset + sizeof(TAGGANT_HEADER) > pefile_len)
+    {
+        return TFILEACCESSDENIED;
+    }
+    /* allocate memory for taggant */
+    tagbuf = malloc(sizeof(TAGGANT1));
+    if (tagbuf)
+    {
+        memset(tagbuf, 0, sizeof(TAGGANT1));
+        /* read taggant header */
+        memcpy(&tagbuf->Header, pefile + taggantoffset, sizeof(TAGGANT_HEADER));
+#ifdef BIG_ENDIAN
+        tagbuf->Header.MarkerBegin = read_le32(&tagbuf->Header.MarkerBegin);
+        tagbuf->Header.TaggantLength = read_le32(&tagbuf->Header.TaggantLength);
+        tagbuf->Header.CMSLength = read_le32(&tagbuf->Header.CMSLength);
+        tagbuf->Header.Version = read_le16(&tagbuf->Header.Version);
+#endif
+        if (tagbuf->Header.Version == TAGGANT_VERSION1 && tagbuf->Header.MarkerBegin == TAGGANT_MARKER_BEGIN && tagbuf->Header.TaggantLength >= TAGGANT_MINIMUM_SIZE && tagbuf->Header.TaggantLength <= TAGGANT_MAXIMUM_SIZE && tagbuf->Header.CMSLength && (tagbuf->Header.CMSLength <= (tagbuf->Header.TaggantLength - sizeof(TAGGANT_HEADER) - sizeof(TAGGANT_FOOTER))))
+        {
+            /* allocate buffer for CMS */
+            tagsize = tagbuf->Header.TaggantLength - sizeof(TAGGANT_HEADER) - sizeof(TAGGANT_FOOTER);
+            tagbuf->CMSBuffer = malloc(tagsize);
+            if (tagbuf->CMSBuffer)
+            {
+                memset(tagbuf->CMSBuffer, 0, tagsize);
+				if (taggantoffset + tagbuf->Header.TaggantLength <= pefile_len)
+                {
+                    /* read CMS */
+                    memcpy(tagbuf->CMSBuffer, pefile + taggantoffset + sizeof(TAGGANT_HEADER), tagsize);
+                    /* read taggant footer */
+                    memcpy(&tagbuf->Footer, pefile + taggantoffset + sizeof(TAGGANT_HEADER) + tagsize, sizeof(TAGGANT_FOOTER));
+#ifdef BIG_ENDIAN
+                    tagbuf->Footer.Extrablob.Length = read_le16(&tagbuf->Footer.Extrablob.Length);
+                    tagbuf->Footer.MarkerEnd = read_le32(&tagbuf->Footer.MarkerEnd);
+#endif
+                    if (tagbuf->Footer.MarkerEnd == TAGGANT_MARKER_END)
+                    {
+                        tagbuf->offset = taggantoffset;
+                        *pTaggant = tagbuf;
+                        res = TNOERR;
+                    }
+                    else
+                    {
+                        res = TNOTAGGANTS;
+                    }
+                }
+                else
+                {
+                    res = TFILEACCESSDENIED;
+                }
+            }
+            else
+            {
+                res = TMEMORY;
+            }
+        }
+        else
+        {
+            res = TNOTAGGANTS;
+        }
+        if (res != TNOERR) 
+        {
+            taggant_free_taggant(tagbuf);
+        }
+    }
+    else
+    {
+        res = TMEMORY;
+    }
+
+    return res;
+}
+
+UNSIGNED32 taggant2_read_binary(const UNSIGNED8 *pefile, UNSIGNED64 offset, PTAGGANT2* pTaggant, TAGGANTCONTAINER filetype)
+{
+    UNSIGNED32 res = TNOTAGGANTS;
+    PTAGGANT2 tagbuf = NULL;
+    UNSIGNED16 hdver = (filetype == TAGGANT_PESEALFILE) ? TAGGANT_VERSION3 : TAGGANT_VERSION2;
+
+    /* seek to the specified offset */
+	if (offset > sizeof(TAGGANT_HEADER2))
+    {
+        offset -= sizeof(TAGGANT_HEADER2);
+        /* allocate memory for taggant */
+        tagbuf = (PTAGGANT2)malloc(sizeof(TAGGANT2));
+        if (tagbuf)
+        {
+            memset(tagbuf, 0, sizeof(TAGGANT2));
+            /* remember the taggant type */
+            tagbuf->tagganttype = filetype;
+            /* read taggant header */
+            memcpy(&tagbuf->Header, pefile + offset, sizeof(TAGGANT_HEADER2));
+#ifdef BIG_ENDIAN
+			tagbuf->Header.Version = read_le16(&tagbuf->Header.Version);
+			tagbuf->Header.CMSLength = read_le32(&tagbuf->Header.CMSLength);
+			tagbuf->Header.TaggantLength = read_le32(&tagbuf->Header.TaggantLength);
+			tagbuf->Header.MarkerBegin = read_le32(&tagbuf->Header.MarkerBegin);
+#endif
+            if (tagbuf->Header.Version == hdver && tagbuf->Header.MarkerBegin == TAGGANT_MARKER_BEGIN && tagbuf->Header.CMSLength)
+            {
+                /* allocate buffer for CMS */				
+                tagbuf->CMSBuffer = malloc(tagbuf->Header.CMSLength);
+                if (tagbuf->CMSBuffer)
+                {
+                    memset(tagbuf->CMSBuffer, 0, tagbuf->Header.CMSLength);
+                    tagbuf->CMSBufferSize = tagbuf->Header.CMSLength;
+                    if (offset > tagbuf->Header.CMSLength)
+                    {
+                        /* seek to the CMS offset */
+                        offset -= tagbuf->Header.CMSLength;
+                        /* read CMS */
+                        memcpy(tagbuf->CMSBuffer, pefile + offset, tagbuf->Header.CMSLength);
+						if (offset > sizeof(UNSIGNED32))
+                        {
+                            offset -= sizeof(UNSIGNED32);
+                            /* read end marker */
+                            tagbuf->Footer.MarkerEnd = read_le32(pefile + offset);
+                            /* check end marker */
+                            if (tagbuf->Footer.MarkerEnd == TAGGANT_MARKER_END)
+                            {
+                                /* make sure there is no appended data in cms */
+                                if (tagbuf->Header.TaggantLength == sizeof(TAGGANT_HEADER2) + tagbuf->Header.CMSLength + /* TAGGANT_FOOTER2 length */ sizeof(UNSIGNED32))
+                                {
+                                    *pTaggant = tagbuf;
+                                    res = TNOERR;
+                                }
+                            }
+                        }
+                        else
+                        {
+                            res = TFILEACCESSDENIED;
+                        }
+                    }
+                    else
+                    {
+                        res = TFILEACCESSDENIED;
+                    }
+                }
+                else
+                {
+                    res = TMEMORY;
+                }
+            }
+            if (res != TNOERR) 
+            {
+                taggant2_free_taggant(tagbuf);
+            }
+        }
+        else
+        {
+            res = TMEMORY;
+        }
+    }
+    else
+    {
+        res = TFILEACCESSDENIED;
+    }
+    return res;
+}
+
+static void fix_image_size(const UNSIGNED8 *pefile, UNSIGNED64 pefile_len,
+                             UNSIGNED64 imagesize,
+                             _Out_writes_(1) UNSIGNED64 *fixedimagesize
+                            )
+{
+    UNSIGNED64 fileend_without_taggants, fileend_without_signature;
+    UNSIGNED32 ds_offset = 0, ds_size = 0;
+    PTAGGANT1 taggant1 = NULL;
+    PTAGGANT2 taggant2 = NULL;
+
+    fileend_without_signature = pefile_len;
+    unsigned int lfanew = read_le32(pefile + offsetof(IMAGE_DOS_HEADER, e_lfanew));
+    unsigned int optsize = read_le16(pefile + lfanew
+                                            + offsetof(IMAGE_NT_HEADERS32, FileHeader)
+                                            + offsetof(IMAGE_FILE_HEADER, SizeOfOptionalHeader));
+    unsigned int machine = read_le16(pefile + lfanew
+                                            + offsetof(IMAGE_NT_HEADERS32, FileHeader)
+                                            + offsetof(IMAGE_FILE_HEADER, Machine));
+    if (machine == IMAGE_FILE_MACHINE_AMD64)
+    {
+        unsigned int dd_sec_pos = lfanew + offsetof(IMAGE_NT_HEADERS64, OptionalHeader)
+                                            + offsetof(IMAGE_OPTIONAL_HEADER64, DataDirectory)
+                                            + IMAGE_DIRECTORY_ENTRY_SECURITY * sizeof(IMAGE_DATA_DIRECTORY);
+        if (lfanew + offsetof(IMAGE_NT_HEADERS64, OptionalHeader) + optsize >= dd_sec_pos + sizeof(IMAGE_DATA_DIRECTORY))
+        {
+            ds_offset = read_le32(pefile + dd_sec_pos);
+            ds_size = read_le32(pefile + dd_sec_pos + 4);
+        }
+    }
+    else
+    {
+        unsigned int dd_sec_pos = lfanew + offsetof(IMAGE_NT_HEADERS32, OptionalHeader)
+                                            + offsetof(IMAGE_OPTIONAL_HEADER32, DataDirectory)
+                                            + IMAGE_DIRECTORY_ENTRY_SECURITY * sizeof(IMAGE_DATA_DIRECTORY);
+        if (lfanew + offsetof(IMAGE_NT_HEADERS32, OptionalHeader) + optsize >= dd_sec_pos + sizeof(IMAGE_DATA_DIRECTORY))
+        {
+            ds_offset = read_le32(pefile + dd_sec_pos);
+            ds_size = read_le32(pefile + dd_sec_pos + 4);
+        }
+    }
+    if (ds_offset != 0 && ds_size != 0 && (ds_offset + ds_size) == pefile_len)
+    {
+        fileend_without_signature -= ds_size;
+        /* check padding to 8 byte boundary as per PE/COFF specification */
+        for (int i = 6; i >= 0 && !pefile[fileend_without_signature - 1]; i--)
+        {
+            /* exclude 0s to align assuming there is a taggant */
+            fileend_without_signature--;
+        }
+    }
+
+    fileend_without_taggants = fileend_without_signature;
+	while (taggant2_read_binary(pefile, fileend_without_taggants, &taggant2, TAGGANT_PEFILE) == TNOERR)
+    {
+        fileend_without_taggants -= taggant2->Header.TaggantLength;
+        taggant2_free_taggant(taggant2);
+    }
+
+    if (taggant_read_from_pe(pefile, pefile_len, &taggant1) == TNOERR)
+    {
+        if (fileend_without_taggants == taggant1->offset + taggant1->Header.TaggantLength)
+        {
+            /* the v1 taggant was at the end of the file */
+            if (fileend_without_taggants > imagesize && taggant1->offset < imagesize)
+            {
+                /* the v1 taggant is outside the sections, but started withim them */
+                fileend_without_taggants -= taggant1->Header.TaggantLength;
+            }
+        }
+        taggant_free_taggant(taggant1);
+    }
+
+    *fixedimagesize = imagesize;
+    if (imagesize > fileend_without_taggants)
+    {
+        /* could happen if last section alignment causes padding in memory */
+        *fixedimagesize = fileend_without_taggants;
+    }
+}
+
+static UNSIGNED32 virttophys(const UNSIGNED8 *pefile, UNSIGNED64 pefile_len,
                              _In_reads_(sectcount) const IMAGE_SECTION_HEADER *secttbl,
                              unsigned int sectcount,
                              UNSIGNED32 virtoff,
@@ -722,15 +1170,10 @@ static UNSIGNED32 virttophys(UNSIGNED64 pefile_len,
 {
     if (sectcount)
     {
-        UNSIGNED32 invalid;
-        UNSIGNED32 physoff;
-        UNSIGNED32 maxsize;
-        unsigned int  hdrchk;
-
-        invalid = 0xffffffff;
-        physoff = virtoff;
-        maxsize = 0;
-        hdrchk = 0;
+        UNSIGNED32 invalid = 0xffffffff;
+        UNSIGNED32 physoff = virtoff;
+        UNSIGNED32 maxsize = 0;
+        unsigned int hdrchk = 0;
 
         do
         {
@@ -739,7 +1182,7 @@ static UNSIGNED32 virttophys(UNSIGNED64 pefile_len,
             UNSIGNED32 rawsize;
             UNSIGNED32 readsize;
             UNSIGNED32 virtsize;
-            UNSIGNED32 virtaddr = 0; // keep compiler happy
+            UNSIGNED32 virtaddr = 0; /* keep compiler happy */
 
             rawalign = (rawptr = read_le32(&secttbl->PointerToRawData)) & ~0x1ff;
             readsize = ((rawptr + (rawsize = read_le32(&secttbl->SizeOfRawData)) + filealign - 1) & ~(filealign - 1)) - rawalign;
@@ -796,6 +1239,7 @@ static UNSIGNED32 virttophys(UNSIGNED64 pefile_len,
 static int object_sizes(_In_reads_(pefile_len) const UNSIGNED8 *pefile,
                         UNSIGNED64 pefile_len,
                         UNSIGNED64 *ppeobj_len,
+                        UNSIGNED64 *ppefixedobj_len,
                         UNSIGNED64 *ptag_off,
                         UNSIGNED32 *ptag_len
                        )
@@ -806,7 +1250,7 @@ static int object_sizes(_In_reads_(pefile_len) const UNSIGNED8 *pefile,
     IMAGE_SECTION_HEADER *secttbl;
     UNSIGNED64 tag_off;
     const UNSIGNED8 *tmp_ptr;
-    const UNSIGNED8 *tag_ptr = 0; //keep compiler happy
+    const UNSIGNED8 *tag_ptr = 0; /* keep compiler happy */
     UNSIGNED32 tag_len;
 
     if (pefile_len < sizeof(IMAGE_DOS_HEADER))
@@ -870,7 +1314,7 @@ static int object_sizes(_In_reads_(pefile_len) const UNSIGNED8 *pefile,
             return ERR_BADPE;
         }
 
-        if ((entrypoint = virttophys(pefile_len,
+        if ((entrypoint = virttophys(pefile, pefile_len,
                                      secttbl = (IMAGE_SECTION_HEADER *) (pefile + lfanew + offsetof(IMAGE_NT_HEADERS32,
                                                                                                     OptionalHeader
                                                                                                    ) + optsize
@@ -891,11 +1335,17 @@ static int object_sizes(_In_reads_(pefile_len) const UNSIGNED8 *pefile,
         {
             return ERR_BADPE;
         }
+        fix_image_size(pefile, pefile_len, *ppeobj_len, ppefixedobj_len);
     }
 
+    tag_off = read_le64(pefile + entrypoint + TAGGANT_ADDRESS_JMP_SIZE);
+    if (ptag_off)
+    {
+        *ptag_off = tag_off;
+    }
     if ((pefile_len < (entrypoint + TAGGANT_ADDRESS_JMP_SIZE + 8))
      || (read_le16(pefile + entrypoint) != TAGGANT_ADDRESS_JMP)
-     || (pefile_len < (tag_off = *ptag_off = read_le64(pefile + entrypoint + TAGGANT_ADDRESS_JMP_SIZE)))
+     || (pefile_len < tag_off)
      || ((pefile_len != tag_off)
       && (pefile_len < (tag_off + sizeof(TAGGANT_MARKER_END)))
         )
@@ -904,7 +1354,10 @@ static int object_sizes(_In_reads_(pefile_len) const UNSIGNED8 *pefile,
         return TNOTAGGANTS;
     }
 
-    *ptag_len = 0;
+    if (ptag_len)
+    {
+        *ptag_len = 0;
+    }
 
     if (pefile_len != tag_off)
     {
@@ -932,7 +1385,10 @@ static int object_sizes(_In_reads_(pefile_len) const UNSIGNED8 *pefile,
             return TNOTAGGANTS;
         }
 
-        *ptag_len = (UNSIGNED32) (tag_ptr + sizeof(TAGGANT_MARKER_END) - (pefile + tag_off));
+        if (ptag_len)
+        {
+            *ptag_len = (UNSIGNED32) (tag_ptr + sizeof(TAGGANT_MARKER_END) - (pefile + tag_off));
+        }
     }
 
     return ERR_NONE;
@@ -952,11 +1408,13 @@ static int validate_spv_parms(int argc,
                               UNSIGNED8 **ppefile32,
                               UNSIGNED64 *ppefile32_len,
                               UNSIGNED64 *ppeobj32_len,
+                              UNSIGNED64 *ppefixedobj32_len,
                               UNSIGNED64 *ptag32_off,
                               UNSIGNED32 *ptag32_len,
                               UNSIGNED8 **ppefile64,
                               UNSIGNED64 *ppefile64_len,
                               UNSIGNED64 *ppeobj64_len,
+                              UNSIGNED64 *ppefixedobj64_len,
                               UNSIGNED64 *ptag64_off,
                               UNSIGNED32 *ptag64_len,
                               UNSIGNED8 **pjsfile,
@@ -994,6 +1452,7 @@ static int validate_spv_parms(int argc,
         else if ((result = object_sizes(*ppefile32,
                                         *ppefile32_len,
                                         ppeobj32_len,
+                                        ppefixedobj32_len,
                                         ptag32_off,
                                         ptag32_len
                                        )
@@ -1026,6 +1485,7 @@ static int validate_spv_parms(int argc,
         else if ((result = object_sizes(*ppefile64,
                                         *ppefile64_len,
                                         ppeobj64_len,
+                                        ppefixedobj64_len,
                                         ptag64_off,
                                         ptag64_len
                                        )
@@ -1552,7 +2012,7 @@ static int erase_v1_taggant(_In_z_ const char *filename,
                            )
 {
     int result;
-    UNSIGNED64 peobj_len;
+    UNSIGNED64 peobj_len, pefixedobj_len;
     UNSIGNED64 tag_off;
 
     if ((result = read_tmp_file(filename,
@@ -1565,6 +2025,7 @@ static int erase_v1_taggant(_In_z_ const char *filename,
         if ((result = object_sizes(*ppefile,
                                    *ppefile_len,
                                    &peobj_len,
+                                   &pefixedobj_len,
                                    &tag_off,
                                    ptag_len
                                   )
@@ -1587,7 +2048,8 @@ static int erase_v1_taggant(_In_z_ const char *filename,
 
 static int append_file(_In_z_ const char *filename,
                        _In_reads_(tmpfile_len) const UNSIGNED8 *tmpfile,
-                       UNSIGNED64 tmpfile_len
+                       UNSIGNED64 tmpfile_len,
+                       UNSIGNED8 value
                       )
 {
     int result;
@@ -1609,7 +2071,7 @@ static int append_file(_In_z_ const char *filename,
          && tagfile
            )
         {
-            if (fwrite(&result,
+            if (fwrite(&value,
                        1,
                        1,
                        tagfile
@@ -1896,6 +2358,7 @@ static int create_v1_v1_taggant(_In_z_ const char *filename1,
                                 _In_z_ const char *filename2,
                                 _In_ const PTAGGANTCONTEXT context,
                                 _In_z_ const UNSIGNED8 *licdata,
+                                UNSIGNED64 obj_len,
                                 UNSIGNED64 file_len,
                                 int puttime
                                )
@@ -1911,13 +2374,14 @@ static int create_v1_v1_taggant(_In_z_ const char *filename1,
         ) == ERR_NONE
        )
     {
-        UNSIGNED64 peobj_len;
+        UNSIGNED64 peobj_len, pefixedobj_len;
         UNSIGNED64 tag_off;
         UNSIGNED32 tag_len;
 
         if (((result = object_sizes(tmpfile,
                                     pefile_len,
                                     &peobj_len,
+                                    &pefixedobj_len,
                                     &tag_off,
                                     &tag_len
                                    )
@@ -1934,7 +2398,7 @@ static int create_v1_v1_taggant(_In_z_ const char *filename1,
             result = create_v1_taggant(filename2,
                                        context,
                                        licdata,
-                                       peobj_len,
+                                       obj_len ? pefixedobj_len : 0,
                                        file_len,
                                        tag_off,
                                        tag_len,
@@ -2148,7 +2612,8 @@ static int append_v1_taggant(_In_z_ const char *filename1,
     {
         if ((result = append_file(filename2,
                                   tmpfile,
-                                  tmpfile_len
+                                  tmpfile_len,
+                                  ERR_BADFILE
                                  )
             ) == ERR_NONE
            )
@@ -2195,7 +2660,8 @@ static int append_v1_v2_taggant(_In_z_ const char *filename1,
     {
         if (((result = append_file(filename2,
                                    tmpfile,
-                                   tmpfile_len
+                                   tmpfile_len,
+                                   ERR_BADFILE
                                   )
              ) == ERR_NONE
             )
@@ -2245,7 +2711,7 @@ static int create_tampered_v1_image(_In_z_ const char *filename1,
     int result;
     unsigned char *tmpfile;
     UNSIGNED64 tmpfile_len;
-    UNSIGNED64 peobj_len;
+    UNSIGNED64 peobj_len, pefixedobj_len;
     UNSIGNED64 tag_off;
     UNSIGNED32 tag_len;
 
@@ -2259,6 +2725,7 @@ static int create_tampered_v1_image(_In_z_ const char *filename1,
         if ((result = object_sizes(tmpfile,
                                    tmpfile_len,
                                    &peobj_len,
+                                   &pefixedobj_len,
                                    &tag_off,
                                    &tag_len
                                   )
@@ -2279,7 +2746,8 @@ static int create_tampered_v1_image(_In_z_ const char *filename1,
                                               filename3,
                                               context,
                                               licdata,
-                                              FALSE,
+                                              0,
+                                              0,
                                               FALSE
                                              );
             }
@@ -2424,7 +2892,8 @@ static int create_bad_v1_hmh(_In_z_ const char *filename1,
                                           filename2,
                                           context,
                                           licdata,
-                                          FALSE,
+                                          0,
+                                          0,
                                           FALSE
                                          );
         }
@@ -2481,7 +2950,8 @@ static int append_v2_taggant(_In_z_ const char *filename,
 
     if ((result = append_file(filename,
                               pefile,
-                              pefile_len
+                              pefile_len,
+                              ERR_BADFILE
                              )
         ) == ERR_NONE
        )
@@ -2692,7 +3162,7 @@ static int create_ds(_In_z_ const char *filename1,
                     )
 {
     int result;
-    UNSIGNED8 *tmpfile;
+    UNSIGNED8 *tmpfile, padding;
     UNSIGNED64 tmpfile_len;
 
     if ((result = read_tmp_file(filename1,
@@ -2722,11 +3192,41 @@ static int create_ds(_In_z_ const char *filename1,
                                                                  )
                                          );
         secdir->VirtualAddress = (DWORD) tmpfile_len;
+        /* pad to 8 byte boundary as per PE/COFF specification */
+        padding = secdir->VirtualAddress % 8;
+        if (padding)
+        {
+            padding = 8 - padding;
+            secdir->VirtualAddress += padding;
+        }
         secdir->Size = 1;
-        result = append_file(filename2,
-                             tmpfile,
-                             tmpfile_len
-                            );
+        for (; padding && result == ERR_NONE; --padding)
+        {
+            result = append_file(filename2,
+                                 tmpfile,
+                                 tmpfile_len,
+                                 0
+                                );
+            free(tmpfile);
+            if ((result = read_tmp_file(filename2,
+                                        &tmpfile,
+                                        &tmpfile_len
+                                       )
+                ) != ERR_NONE
+               )
+            {
+                tmpfile = NULL;
+                break;
+            }
+        }
+        if (result == ERR_NONE)
+        {
+            result = append_file(filename2,
+                                 tmpfile,
+                                 tmpfile_len,
+                                 ERR_BADFILE
+                                );
+        }
         free(tmpfile);
     }
 
@@ -2761,7 +3261,7 @@ static int create_eof(_In_z_ const char *filename,
                                       pefile,
                                       (size_t) pefile_len
                                      )
-               + virttophys(pefile_len,
+               + virttophys(pefile, pefile_len,
                             (IMAGE_SECTION_HEADER *) (pefile + lfanew + offsetof(IMAGE_NT_HEADERS32,
                                                                                  OptionalHeader
                                                                                 ) + read_le16(pefile + lfanew + offsetof(IMAGE_NT_HEADERS32,
@@ -2795,6 +3295,7 @@ static int create_eof(_In_z_ const char *filename,
                                      ),
                             &peobj_len
                            );
+        fix_image_size(pefile, pefile_len, peobj_len, &peobj_len);
         tagptr[2] = (UNSIGNED8) (tmpfile_len = pefile_len + TAGGANT_MINIMUM_SIZE);
         tagptr[3] = (UNSIGNED8) (tmpfile_len >> 8);
         tagptr[4] = (UNSIGNED8) (tmpfile_len >> 16);
@@ -2843,18 +3344,24 @@ static int create_eof(_In_z_ const char *filename,
                        0,
                        TAGGANT_MINIMUM_SIZE - taglen
                       );
-                result = create_tmp_v1_taggant(filename,
-                                               context,
-                                               licdata,
-                                               tmpfile,
-                                               peobj_len,
-                                               pefile_len + TAGGANT_MINIMUM_SIZE,
-                                               pefile_len + TAGGANT_MINIMUM_SIZE,
-                                               pefile_len + TAGGANT_MINIMUM_SIZE,
-                                               0,
-                                               FALSE,
-                                               FALSE
-                                              );
+                /* After appending data peobj_len may have changed if the last section had a 
+                   real size smaller than indicated by the headers */
+                result = object_sizes(tmpfile, pefile_len + TAGGANT_MINIMUM_SIZE, &peobj_len, &peobj_len, NULL, NULL);
+				if (result == ERR_NONE)
+                {
+                    result = create_tmp_v1_taggant(filename,
+                                                   context,
+                                                   licdata,
+                                                   tmpfile,
+                                                   peobj_len,
+                                                   pefile_len + TAGGANT_MINIMUM_SIZE,
+                                                   pefile_len + TAGGANT_MINIMUM_SIZE,
+                                                   pefile_len + TAGGANT_MINIMUM_SIZE,
+                                                   0,
+                                                   FALSE,
+                                                   FALSE
+                                                  );
+                }
             }
 
             free(tmpfile);
@@ -2900,7 +3407,9 @@ static int test_spv_v101(_In_ const PTAGGANTCONTEXT context,
 }
 
 static int test_spv_v102(_In_ const PTAGGANTCONTEXT context,
-                         _In_z_ const UNSIGNED8 *licdata
+                         _In_z_ const UNSIGNED8 *licdata,
+                         UNSIGNED64 peobj_len,
+                         UNSIGNED64 pefile_len
                         )
 {
     int result;
@@ -2911,7 +3420,8 @@ static int test_spv_v102(_In_ const PTAGGANTCONTEXT context,
                                   "v1test02",
                                   context,
                                   licdata,
-                                  FALSE,
+                                  peobj_len,
+                                  pefile_len,
                                   FALSE
                                  );
 
@@ -2986,7 +3496,9 @@ static int test_spv_v104(_In_ const PTAGGANTCONTEXT context,
 }
 
 static int test_spv_v105(_In_ const PTAGGANTCONTEXT context,
-                         _In_z_ const UNSIGNED8 *licdata
+                         _In_z_ const UNSIGNED8 *licdata,
+                         UNSIGNED64 peobj_len,
+                         UNSIGNED64 pefile_len
                         )
 {
     int result;
@@ -2997,7 +3509,8 @@ static int test_spv_v105(_In_ const PTAGGANTCONTEXT context,
                                   "v1test05",
                                   context,
                                   licdata,
-                                  FALSE,
+                                  peobj_len,
+                                  pefile_len,
                                   FALSE
                                  );
 
@@ -3064,6 +3577,7 @@ static int test_spv_v107(_In_ const PTAGGANTCONTEXT context,
 
 static int test_spv_v108(_In_ const PTAGGANTCONTEXT context,
                          _In_z_ const UNSIGNED8 *licdata,
+                         UNSIGNED64 peobj_len,
                          UNSIGNED64 pefile_len
                         )
 {
@@ -3074,6 +3588,7 @@ static int test_spv_v108(_In_ const PTAGGANTCONTEXT context,
                                   "v1test08",
                                   context,
                                   licdata,
+                                  peobj_len,
                                   pefile_len,
                                   FALSE
                                  );
@@ -3140,6 +3655,7 @@ static int test_spv_v110(_In_ const PTAGGANTCONTEXT context,
 
 static int test_spv_v111(_In_ const PTAGGANTCONTEXT context,
                          _In_z_ const UNSIGNED8 *licdata,
+                         UNSIGNED64 peobj_len,
                          UNSIGNED64 pefile_len
                         )
 {
@@ -3151,6 +3667,7 @@ static int test_spv_v111(_In_ const PTAGGANTCONTEXT context,
                                   "v1test11",
                                   context,
                                   licdata,
+                                  peobj_len,
                                   pefile_len,
                                   FALSE
                                  );
@@ -3636,7 +4153,9 @@ static int test_spv_v127(_In_ const PTAGGANTCONTEXT context,
 }
 
 static int test_spv_v128(_In_ const PTAGGANTCONTEXT context,
-                         _In_z_ const UNSIGNED8 *licdata
+                         _In_z_ const UNSIGNED8 *licdata,
+                         UNSIGNED64 peobj_len,
+                         UNSIGNED64 pefile_len
                         )
 {
     int result;
@@ -3647,7 +4166,8 @@ static int test_spv_v128(_In_ const PTAGGANTCONTEXT context,
                                   "v1test28",
                                   context,
                                   licdata,
-                                  FALSE,
+                                  peobj_len,
+                                  pefile_len,
                                   TRUE
                                  );
 
@@ -3743,7 +4263,9 @@ static int test_spv_v130(_In_ const PTAGGANTCONTEXT context,
 }
 
 static int test_spv_v131(_In_ const PTAGGANTCONTEXT context,
-                         _In_z_ const UNSIGNED8 *licdata
+                         _In_z_ const UNSIGNED8 *licdata,
+                         UNSIGNED64 peobj_len,
+                         UNSIGNED64 pefile_len
                         )
 {
     int result;
@@ -3754,7 +4276,8 @@ static int test_spv_v131(_In_ const PTAGGANTCONTEXT context,
                                   "v1test31",
                                   context,
                                   licdata,
-                                  FALSE,
+                                  peobj_len,
+                                  pefile_len,
                                   TRUE
                                  );
 
@@ -6113,8 +6636,8 @@ static int test_spv_eof02(_In_ const PTAGGANTCONTEXT context,
                         context,
                         licdata,
                         pefile,
-                        peobj_len,
-                        pefile_len
+						peobj_len,
+						pefile_len
                        );
 
     if (result == ERR_NONE)
@@ -6136,29 +6659,32 @@ static int test_spv_pe(_In_ const PTAGGANTCONTEXT context,
                        UNSIGNED64 peobj64_len,
                        UNSIGNED64 pefile64_len,
                        UNSIGNED64 tag64_off,
-                       UNSIGNED32 tag64_len
+                       UNSIGNED32 tag64_len,
+                       UNSIGNED64 v1file32_len,
+                       UNSIGNED64 v1file64_len,
+                       int use_default_file_size
                       )
 {
     int result;
-    UNSIGNED64 file32_len;
-    UNSIGNED64 file64_len;
 
-    file32_len = tag32_len ? 0 : pefile32_len;
-    file64_len = tag64_len ? 0 : pefile64_len;
+    UNSIGNED64 file32_len = use_default_file_size ? 0 : pefile32_len;
+    UNSIGNED64 file64_len = use_default_file_size ? 0 : pefile64_len;
 
     if (((result = test_spv_v101(context,
                                  licdata,
                                  pefile32,
                                  peobj32_len,
                                  pefile32_len,
-                                 file32_len,
+                                 v1file32_len,
                                  tag32_off,
                                  tag32_len
                                 )
          ) != ERR_NONE
         )
      || ((result = test_spv_v102(context,
-                                 licdata
+                                 licdata,
+                                 peobj32_len,
+                                 file32_len
                                 )
          ) != ERR_NONE
         )
@@ -6174,14 +6700,16 @@ static int test_spv_pe(_In_ const PTAGGANTCONTEXT context,
                                  pefile64,
                                  peobj64_len,
                                  pefile64_len,
-                                 file64_len,
+                                 v1file64_len,
                                  tag64_off,
                                  tag64_len
                                 )
          ) != ERR_NONE
         )
      || ((result = test_spv_v105(context,
-                                 licdata
+                                 licdata,
+                                 peobj64_len,
+                                 file64_len
                                 )
          ) != ERR_NONE
         )
@@ -6201,7 +6729,8 @@ static int test_spv_pe(_In_ const PTAGGANTCONTEXT context,
         )
      || ((result = test_spv_v108(context,
                                  licdata,
-                                 pefile32_len
+                                 peobj32_len,
+                                 file32_len
                                 )
          ) != ERR_NONE
         )
@@ -6221,7 +6750,8 @@ static int test_spv_pe(_In_ const PTAGGANTCONTEXT context,
         )
      || ((result = test_spv_v111(context,
                                  licdata,
-                                 pefile64_len
+                                 peobj64_len,
+                                 file64_len
                                 )
          ) != ERR_NONE
         )
@@ -6285,7 +6815,7 @@ static int test_spv_pe(_In_ const PTAGGANTCONTEXT context,
                                  pefile32,
                                  peobj32_len,
                                  pefile32_len,
-                                 file32_len,
+                                 v1file32_len,
                                  tag32_off,
                                  tag32_len
                                 )
@@ -6296,7 +6826,7 @@ static int test_spv_pe(_In_ const PTAGGANTCONTEXT context,
                                  pefile64,
                                  peobj64_len,
                                  pefile64_len,
-                                 file64_len,
+                                 v1file64_len,
                                  tag64_off,
                                  tag64_len
                                 )
@@ -6307,7 +6837,7 @@ static int test_spv_pe(_In_ const PTAGGANTCONTEXT context,
                                  pefile32,
                                  peobj32_len,
                                  pefile32_len,
-                                 file32_len,
+                                 v1file32_len,
                                  tag32_off,
                                  tag32_len
                                 )
@@ -6325,7 +6855,7 @@ static int test_spv_pe(_In_ const PTAGGANTCONTEXT context,
                                  pefile64,
                                  peobj64_len,
                                  pefile64_len,
-                                 file64_len,
+                                 v1file64_len,
                                  tag64_off,
                                  tag64_len
                                 )
@@ -6343,14 +6873,16 @@ static int test_spv_pe(_In_ const PTAGGANTCONTEXT context,
                                  pefile32,
                                  peobj32_len,
                                  pefile32_len,
-                                 file32_len,
+                                 v1file32_len,
                                  tag32_off,
                                  tag32_len
                                 )
          ) != ERR_NONE
         )
      || ((result = test_spv_v128(context,
-                                 licdata
+                                 licdata,
+                                 peobj32_len,
+                                 file32_len
                                 )
          ) != ERR_NONE
         )
@@ -6369,14 +6901,16 @@ static int test_spv_pe(_In_ const PTAGGANTCONTEXT context,
                                  pefile64,
                                  peobj64_len,
                                  pefile64_len,
-                                 file64_len,
+                                 v1file64_len,
                                  tag64_off,
                                  tag64_len
                                 )
          ) != ERR_NONE
         )
      || ((result = test_spv_v131(context,
-                                 licdata
+                                 licdata,
+                                 peobj64_len,
+                                 pefile64_len
                                 )
          ) != ERR_NONE
         )
@@ -6999,12 +7533,12 @@ static int validate_taggant(_In_ const char *filename,
             else
             {
                 char file_len[8];
-                UNSIGNED64 obj_len;
+                UNSIGNED64 obj_len, fixedobj_len;
                 UNSIGNED64 tag_off;
                 UNSIGNED32 tag_len;
 
                 size = 8;
-                obj_len = 0;
+                obj_len = fixedobj_len = 0;
 
                 if (((result = pTaggantGetInfo(object,
                                                EFILEEND,
@@ -7017,6 +7551,7 @@ static int validate_taggant(_In_ const char *filename,
                   || ((result = object_sizes(tmpfile,
                                              tmpfile_len,
                                              &obj_len,
+                                             &fixedobj_len,
                                              &tag_off,
                                              &tag_len
                                             )
@@ -7029,9 +7564,37 @@ static int validate_taggant(_In_ const char *filename,
                     result = pTaggantValidateDefaultHashes(context,
                                                            object,
                                                            (PVOID) infile,
-                                                           obj_len,
+                                                           fixedobj_len,
                                                            read_le64(file_len)
                                                           );
+                    /* now try with default sizes */
+                    if (result == TNOERR)
+                    {
+                        result = pTaggantValidateDefaultHashes(context,
+                                                               object,
+                                                               (PVOID) infile,
+                                                               0,
+                                                               read_le64(file_len)
+                                                              );
+                        if (result == TNOERR)
+                        {
+                            result = pTaggantValidateDefaultHashes(context,
+                                                                   object,
+                                                                   (PVOID) infile,
+                                                                   fixedobj_len,
+                                                                   0
+                                                                  );
+                            if (result == TNOERR)
+                            {
+                                result = pTaggantValidateDefaultHashes(context,
+                                                                       object,
+                                                                       (PVOID) infile,
+                                                                       0,
+                                                                       0
+                                                                      );
+                            }
+                        }
+                    }
                 }
             }
 
@@ -7288,13 +7851,14 @@ static int validate_tampered(_In_opt_z_ const char *filename1,
 
             case TAMPER_TAGP101:
             {
-                UNSIGNED64 peobj_len;
+                UNSIGNED64 peobj_len, pefixedobj_len;
                 UNSIGNED64 tag_off;
                 UNSIGNED32 tag_len;
 
                 result = object_sizes(tmpfile,
                                       tmpfile_len,
                                       &peobj_len,
+                                      &pefixedobj_len,
                                       &tag_off,
                                       &tag_len
                                      );
@@ -7690,7 +8254,8 @@ static int validate_appended(_In_z_ const char *filename1,
     {
         if ((result = append_file(filename2,
                                   tmpfile,
-                                  tmpfile_len
+                                  tmpfile_len,
+                                  ERR_BADFILE
                                  )
             ) == ERR_NONE
            )
@@ -8218,280 +8783,379 @@ static int test_ssv_014(_In_ const PTAGGANTCONTEXT context,
 }
 
 static int test_ssv_015(_In_ const PTAGGANTCONTEXT context,
-                        _In_ const UNSIGNED8 *rootdata
+                        _In_ const UNSIGNED8 *rootdata,
+                        int invalid_size_in_sections
                        )
 {
-    int result;
+    int result = ERR_NONE;
     PTAGGANT taggant;
     int taglast;
     int method;
 
     printf(PR_WIDTH, "(015)testing 32-bit PE file containing good v2 Taggant and good v1 Taggant and good image and good overlay:");
 
-    taggant = NULL;
-    result = validate_taggant_taggant("v2test10",
-                                      &taggant,
-                                      context,
-                                      rootdata,
-                                      NULL,
-                                      FALSE,
-                                      FALSE,
-                                      TAGGANT_PEFILE,
-                                      &taglast,
-                                      &method
-                                     );
-    pTaggantFreeTaggant(taggant);
-
-    if (result == ERR_NONE)
+    /* This test is expected to fail for valid files with original size less
+       than the size for sections. There is no way to differentiate from
+       original file and overlay. */
+    if (invalid_size_in_sections)
     {
-        printf("pass\n");
+        printf("not tested because peobj32_len != pefixedobj32_len\n");
     }
+    else
+    {
+        taggant = NULL;
+        result = validate_taggant_taggant("v2test10",
+                                          &taggant,
+                                          context,
+                                          rootdata,
+                                          NULL,
+                                          FALSE,
+                                          FALSE,
+                                          TAGGANT_PEFILE,
+                                          &taglast,
+                                          &method
+                                         );
+        pTaggantFreeTaggant(taggant);
+
+        if (result == ERR_NONE)
+        {
+            printf("pass\n");
+        }
+	}
 
     return result;
 }
 
 static int test_ssv_016(_In_ const PTAGGANTCONTEXT context,
-                        _In_ const UNSIGNED8 *rootdata
+                        _In_ const UNSIGNED8 *rootdata,
+                        int invalid_size_in_sections
                        )
 {
-    int result;
+    int result = ERR_NONE;
     PTAGGANT taggant;
     int taglast;
     int method;
 
-    printf(PR_WIDTH, "(016)testing 32-bit PE file containing good v2(a) Taggant and good v2(b) Taggant and good image and good overlay:");
+    printf(PR_WIDTH, "(016)not testing 32-bit PE file containing good v2(a) Taggant and good v2(b) Taggant and good image and good overlay");
 
-    taggant = NULL;
-    result = validate_taggant_taggant("v2test11",
-                                      &taggant,
-                                      context,
-                                      rootdata,
-                                      NULL,
-                                      FALSE,
-                                      FALSE,
-                                      TAGGANT_PEFILE,
-                                      &taglast,
-                                      &method
-                                     );
-    pTaggantFreeTaggant(taggant);
-
-    if (result == ERR_NONE)
+    /* This test is expected to fail for valid files with original size less
+       than the size for sections. There is no way to differentiate from
+       original file and overlay. */
+    if (invalid_size_in_sections)
     {
-        printf("pass\n");
+        printf("not tested because peobj32_len != pefixedobj32_len\n");
+    }
+    else
+    {
+        taggant = NULL;
+        result = validate_taggant_taggant("v2test11",
+                                          &taggant,
+                                          context,
+                                          rootdata,
+                                          NULL,
+                                          FALSE,
+                                          FALSE,
+                                          TAGGANT_PEFILE,
+                                          &taglast,
+                                          &method
+                                         );
+        pTaggantFreeTaggant(taggant);
+
+        if (result == ERR_NONE)
+        {
+            printf("pass\n");
+        }
     }
 
     return result;
 }
 
 static int test_ssv_017(_In_ const PTAGGANTCONTEXT context,
-                        _In_ const UNSIGNED8 *rootdata
+                        _In_ const UNSIGNED8 *rootdata,
+                        int invalid_size_in_sections
                        )
 {
-    int result;
+    int result = ERR_NONE;
     PTAGGANT taggant;
 
     printf(PR_WIDTH, "(017)testing 32-bit PE file containing good v2(a) Taggant and good v2(b) Taggant and good v1 Taggant and good image and good overlay:");
 
-    taggant = NULL;
-    result = validate_taggant_taggant_taggant("v2test12",
-                                              &taggant,
-                                              context,
-                                              rootdata,
-                                              NULL,
-                                              FALSE,
-                                              FALSE,
-                                              TAGGANT_PEFILE
-                                             );
-    pTaggantFreeTaggant(taggant);
-
-    if (result == ERR_NONE)
+    /* This test is expected to fail for valid files with original size less
+       than the size for sections. There is no way to differentiate from
+       original file and overlay. */
+    if (invalid_size_in_sections)
     {
-        printf("pass\n");
+        printf("not tested because peobj32_len != pefixedobj32_len\n");
+    }
+    else
+    {
+        taggant = NULL;
+        result = validate_taggant_taggant_taggant("v2test12",
+                                                  &taggant,
+                                                  context,
+                                                  rootdata,
+                                                  NULL,
+                                                  FALSE,
+                                                  FALSE,
+                                                  TAGGANT_PEFILE
+                                                 );
+        pTaggantFreeTaggant(taggant);
+
+        if (result == ERR_NONE)
+        {
+            printf("pass\n");
+        }
     }
 
     return result;
 }
 
 static int test_ssv_018(_In_ const PTAGGANTCONTEXT context,
-                        _In_ const UNSIGNED8 *rootdata
+                        _In_ const UNSIGNED8 *rootdata,
+                        int invalid_size_in_sections
                        )
 {
-    int result;
+    int result = ERR_NONE;
     PTAGGANT taggant;
     int taglast;
     int method;
 
     printf(PR_WIDTH, "(018)testing 64-bit PE file containing good v1 Taggant and good image and good overlay:");
 
-    taggant = NULL;
-    result = validate_taggant("v1test10",
-                              &taggant,
-                              context,
-                              rootdata,
-                              NULL,
-                              FALSE,
-                              FALSE,
-                              TAGGANT_PEFILE,
-                              &taglast,
-                              &method
-                             );
-    pTaggantFreeTaggant(taggant);
-
-    if (result == ERR_NONE)
+    /* This test is expected to fail for valid files with original size less
+       than the size for sections. There is no way to differentiate from
+       original file and overlay. */
+    if (invalid_size_in_sections)
     {
-        printf("pass\n");
+        printf("not tested because peobj64_len != pefixedobj64_len\n");
+    }
+    else
+    {
+        taggant = NULL;
+        result = validate_taggant("v1test10",
+                                  &taggant,
+                                  context,
+                                  rootdata,
+                                  NULL,
+                                  FALSE,
+                                  FALSE,
+                                  TAGGANT_PEFILE,
+                                  &taglast,
+                                  &method
+                                 );
+        pTaggantFreeTaggant(taggant);
+
+        if (result == ERR_NONE)
+        {
+            printf("pass\n");
+        }
     }
 
     return result;
 }
 
 static int test_ssv_019(_In_ const PTAGGANTCONTEXT context,
-                        _In_ const UNSIGNED8 *rootdata
+                        _In_ const UNSIGNED8 *rootdata,
+                        int invalid_size_in_sections
                        )
 {
-    int result;
+    int result = ERR_NONE;
     PTAGGANT taggant;
     int taglast;
     int method;
 
     printf(PR_WIDTH, "(019)testing 64-bit PE file containing good v2 Taggant and good image and good overlay:");
 
-    taggant = NULL;
-    result = validate_taggant("v2test13",
-                              &taggant,
-                              context,
-                              rootdata,
-                              NULL,
-                              FALSE,
-                              FALSE,
-                              TAGGANT_PEFILE,
-                              &taglast,
-                              &method
-                             );
-    pTaggantFreeTaggant(taggant);
-
-    if (result == ERR_NONE)
+    /* This test is expected to fail for valid files with original size less
+       than the size for sections. There is no way to differentiate from
+       original file and overlay. */
+    if (invalid_size_in_sections)
     {
-        printf("pass\n");
+        printf("not tested because peobj64_len != pefixedobj64_len\n");
+    }
+    else
+    {
+        taggant = NULL;
+        result = validate_taggant("v2test13",
+                                  &taggant,
+                                  context,
+                                  rootdata,
+                                  NULL,
+                                  FALSE,
+                                  FALSE,
+                                  TAGGANT_PEFILE,
+                                  &taglast,
+                                  &method
+                                 );
+        pTaggantFreeTaggant(taggant);
+
+        if (result == ERR_NONE)
+        {
+            printf("pass\n");
+        }
     }
 
     return result;
 }
 
 static int test_ssv_020(_In_ const PTAGGANTCONTEXT context,
-                        _In_ const UNSIGNED8 *rootdata
+                        _In_ const UNSIGNED8 *rootdata,
+                        int invalid_size_in_sections
                        )
 {
-    int result;
+    int result = ERR_NONE;
     PTAGGANT taggant;
     int taglast;
     int method;
 
     printf(PR_WIDTH, "(020)testing 64-bit PE file containing good v2 Taggant and good v1 Taggant and good image and good overlay:");
 
-    taggant = NULL;
-    result = validate_taggant_taggant("v2test14",
-                                      &taggant,
-                                      context,
-                                      rootdata,
-                                      NULL,
-                                      FALSE,
-                                      FALSE,
-                                      TAGGANT_PEFILE,
-                                      &taglast,
-                                      &method
-                                     );
-    pTaggantFreeTaggant(taggant);
-
-    if (result == ERR_NONE)
+    /* This test is expected to fail for valid files with original size less
+       than the size for sections. There is no way to differentiate from
+       original file and overlay. */
+    if (invalid_size_in_sections)
     {
-        printf("pass\n");
+        printf("not tested because peobj64_len != pefixedobj64_len\n");
+    }
+    else
+    {
+        taggant = NULL;
+        result = validate_taggant_taggant("v2test14",
+                                          &taggant,
+                                          context,
+                                          rootdata,
+                                          NULL,
+                                          FALSE,
+                                          FALSE,
+                                          TAGGANT_PEFILE,
+                                          &taglast,
+                                          &method
+                                         );
+        pTaggantFreeTaggant(taggant);
+
+        if (result == ERR_NONE)
+        {
+            printf("pass\n");
+        }
     }
 
     return result;
 }
 
 static int test_ssv_021(_In_ const PTAGGANTCONTEXT context,
-                        _In_ const UNSIGNED8 *rootdata
+                        _In_ const UNSIGNED8 *rootdata,
+                        int invalid_size_in_sections
                        )
 {
-    int result;
+    int result = ERR_NONE;
     PTAGGANT taggant;
     int taglast;
     int method;
 
     printf(PR_WIDTH, "(021)testing 64-bit PE file containing good v2(a) Taggant and good v2(b) Taggant and good image and good overlay:");
 
-    taggant = NULL;
-    result = validate_taggant_taggant("v2test15",
-                                      &taggant,
-                                      context,
-                                      rootdata,
-                                      NULL,
-                                      FALSE,
-                                      FALSE,
-                                      TAGGANT_PEFILE,
-                                      &taglast,
-                                      &method
-                                     );
-    pTaggantFreeTaggant(taggant);
-
-    if (result == ERR_NONE)
+    /* This test is expected to fail for valid files with original size less
+       than the size for sections. There is no way to differentiate from
+       original file and overlay. */
+    if (invalid_size_in_sections)
     {
-        printf("pass\n");
+        printf("not tested because peobj64_len != pefixedobj64_len\n");
+    }
+    else
+    {
+        taggant = NULL;
+        result = validate_taggant_taggant("v2test15",
+                                          &taggant,
+                                          context,
+                                          rootdata,
+                                          NULL,
+                                          FALSE,
+                                          FALSE,
+                                          TAGGANT_PEFILE,
+                                          &taglast,
+                                          &method
+                                         );
+        pTaggantFreeTaggant(taggant);
+
+        if (result == ERR_NONE)
+        {
+            printf("pass\n");
+        }
     }
 
     return result;
 }
 
 static int test_ssv_022(_In_ const PTAGGANTCONTEXT context,
-                        _In_ const UNSIGNED8 *rootdata
+                        _In_ const UNSIGNED8 *rootdata,
+                        int invalid_size_in_sections
                        )
 {
-    int result;
+    int result = ERR_NONE;
     PTAGGANT taggant;
 
     printf(PR_WIDTH, "(022)testing 64-bit PE file containing good v2(a) Taggant and good v2(b) Taggant and good v1 Taggant and good image and good overlay:");
 
-    taggant = NULL;
-    result = validate_taggant_taggant_taggant("v2test16",
-                                              &taggant,
-                                              context,
-                                              rootdata,
-                                              NULL,
-                                              FALSE,
-                                              FALSE,
-                                              TAGGANT_PEFILE
-                                             );
-    pTaggantFreeTaggant(taggant);
-
-    if (result == ERR_NONE)
+    /* This test is expected to fail for valid files with original size less
+       than the size for sections. There is no way to differentiate from
+       original file and overlay. */
+    if (invalid_size_in_sections)
     {
-        printf("pass\n");
+        printf("not tested because peobj64_len != pefixedobj64_len\n");
+    }
+    else
+    {
+        taggant = NULL;
+        result = validate_taggant_taggant_taggant("v2test16",
+                                                  &taggant,
+                                                  context,
+                                                  rootdata,
+                                                  NULL,
+                                                  FALSE,
+                                                  FALSE,
+                                                  TAGGANT_PEFILE
+                                                 );
+        pTaggantFreeTaggant(taggant);
+
+        if (result == ERR_NONE)
+        {
+            printf("pass\n");
+        }
     }
 
     return result;
 }
 
 static int test_ssv_023(_In_ const PTAGGANTCONTEXT context,
-                        _In_ const UNSIGNED8 *rootdata
+                        _In_ const UNSIGNED8 *rootdata,
+                        int invalid_size_in_sections
                        )
 {
-    int result;
+    int result = ERR_NONE;
 
     printf(PR_WIDTH, "(023)testing 32-bit PE file containing good v1 Taggant and good image and tampered overlay:");
 
-    result = validate_tampered("v1test07",
-                               "vssvtest023",
-                               context,
-                               rootdata,
-                               TAMPER_FILELEN,
-                               TAG_1
-                              );
-
-    if (result == ERR_NONE)
+    /* This test is expected to fail for valid files with original size less
+       than the size for sections. There is no way to differentiate from
+       original file and overlay. */
+    if (invalid_size_in_sections)
     {
-        printf("pass\n");
+        printf("not tested because peobj32_len != pefixedobj32_len\n");
+    }
+    else
+    {
+        result = validate_tampered("v1test07",
+                                   "vssvtest023",
+                                   context,
+                                   rootdata,
+                                   TAMPER_FILELEN,
+                                   TAG_1
+                                  );
+
+        if (result == ERR_NONE)
+        {
+            printf("pass\n");
+        }
     }
 
     return result;
@@ -8522,24 +9186,35 @@ static int test_ssv_024(_In_ const PTAGGANTCONTEXT context,
 }
 
 static int test_ssv_025(_In_ const PTAGGANTCONTEXT context,
-                        _In_ const UNSIGNED8 *rootdata
+                        _In_ const UNSIGNED8 *rootdata,
+                        int invalid_size_in_sections
                        )
 {
-    int result;
+    int result = ERR_NONE;
 
     printf(PR_WIDTH, "(025)testing 32-bit PE file containing good v2 Taggant and good v1 Taggant and good image and tampered overlay:");
 
-    result = validate_tampered("v2test10",
-                               "vssvtest025",
-                               context,
-                               rootdata,
-                               TAMPER_FILELENM1,
-                               TAG_2
-                              );
-
-    if (result == ERR_NONE)
+    /* This test is expected to fail for valid files with original size less
+       than the size for sections. There is no way to differentiate from
+       original file and overlay. */
+    if (invalid_size_in_sections)
     {
-        printf("pass\n");
+        printf("not tested because peobj32_len != pefixedobj32_len\n");
+    }
+    else
+    {
+        result = validate_tampered("v2test10",
+                                   "vssvtest025",
+                                   context,
+                                   rootdata,
+                                   TAMPER_FILELENM1,
+                                   TAG_2
+                                  );
+
+        if (result == ERR_NONE)
+        {
+            printf("pass\n");
+        }
     }
 
     return result;
@@ -8570,48 +9245,70 @@ static int test_ssv_026(_In_ const PTAGGANTCONTEXT context,
 }
 
 static int test_ssv_027(_In_ const PTAGGANTCONTEXT context,
-                        _In_ const UNSIGNED8 *rootdata
+                        _In_ const UNSIGNED8 *rootdata,
+                        int invalid_size_in_sections
                        )
 {
-    int result;
+    int result = ERR_NONE;
 
     printf(PR_WIDTH, "(027)testing 32-bit PE file containing good v2(a) Taggant and good v2(b) Taggant and good v1 Taggant and good image and tampered overlay:");
 
-    result = validate_tampered("v2test12",
-                               "vssvtest027",
-                               context,
-                               rootdata,
-                               TAMPER_FILELENM2,
-                               TAG_3
-                              );
-
-    if (result == ERR_NONE)
+    /* This test is expected to fail for valid files with original size less
+       than the size for sections. There is no way to differentiate from
+       original file and overlay. */
+    if (invalid_size_in_sections)
     {
-        printf("pass\n");
+        printf("not tested because peobj32_len != pefixedobj32_len\n");
+    }
+    else
+    {
+        result = validate_tampered("v2test12",
+                                   "vssvtest027",
+                                   context,
+                                   rootdata,
+                                   TAMPER_FILELENM2,
+                                   TAG_3
+                                  );
+
+        if (result == ERR_NONE)
+        {
+            printf("pass\n");
+        }
     }
 
     return result;
 }
 
 static int test_ssv_028(_In_ const PTAGGANTCONTEXT context,
-                        _In_ const UNSIGNED8 *rootdata
+                        _In_ const UNSIGNED8 *rootdata,
+                        int invalid_size_in_sections
                        )
 {
-    int result;
+    int result = ERR_NONE;
 
     printf(PR_WIDTH, "(028)testing 64-bit PE file containing good v1 Taggant and good image and tampered overlay:");
 
-    result = validate_tampered("v1test10",
-                               "vssvtest028",
-                               context,
-                               rootdata,
-                               TAMPER_FILELEN,
-                               TAG_1
-                              );
-
-    if (result == ERR_NONE)
+    /* This test is expected to fail for valid files with original size less
+       than the size for sections. There is no way to differentiate from
+       original file and overlay. */
+    if (invalid_size_in_sections)
     {
-        printf("pass\n");
+        printf("not tested because peobj64_len != pefixedobj64_len\n");
+    }
+    else
+    {
+        result = validate_tampered("v1test10",
+                                   "vssvtest028",
+                                   context,
+                                   rootdata,
+                                   TAMPER_FILELEN,
+                                   TAG_1
+                                  );
+
+        if (result == ERR_NONE)
+        {
+            printf("pass\n");
+        }
     }
 
     return result;
@@ -8642,24 +9339,35 @@ static int test_ssv_029(_In_ const PTAGGANTCONTEXT context,
 }
 
 static int test_ssv_030(_In_ const PTAGGANTCONTEXT context,
-                        _In_ const UNSIGNED8 *rootdata
+                        _In_ const UNSIGNED8 *rootdata,
+                        int invalid_size_in_sections
                        )
 {
-    int result;
+    int result = ERR_NONE;
 
     printf(PR_WIDTH, "(030)testing 64-bit PE file containing good v2 Taggant and good v1 Taggant and good image and tampered overlay:");
 
-    result = validate_tampered("v2test14",
-                               "vssvtest030",
-                               context,
-                               rootdata,
-                               TAMPER_FILELENM1,
-                               TAG_2
-                              );
-
-    if (result == ERR_NONE)
+    /* This test is expected to fail for valid files with original size less
+       than the size for sections. There is no way to differentiate from
+       original file and overlay. */
+    if (invalid_size_in_sections)
     {
-        printf("pass\n");
+        printf("not tested because peobj64_len != pefixedobj64_len\n");
+    }
+    else
+    {
+        result = validate_tampered("v2test14",
+                                   "vssvtest030",
+                                   context,
+                                   rootdata,
+                                   TAMPER_FILELENM1,
+                                   TAG_2
+                                  );
+
+        if (result == ERR_NONE)
+        {
+            printf("pass\n");
+        }
     }
 
     return result;
@@ -8690,24 +9398,35 @@ static int test_ssv_031(_In_ const PTAGGANTCONTEXT context,
 }
 
 static int test_ssv_032(_In_ const PTAGGANTCONTEXT context,
-                        _In_ const UNSIGNED8 *rootdata
+                        _In_ const UNSIGNED8 *rootdata,
+                        int invalid_size_in_sections
                        )
 {
-    int result;
+    int result = ERR_NONE;
 
     printf(PR_WIDTH, "(032)testing 64-bit PE file containing good v2(a) Taggant and good v2(b) Taggant and good v1 Taggant and good image and tampered overlay:");
 
-    result = validate_tampered("v2test16",
-                               "vssvtest032",
-                               context,
-                               rootdata,
-                               TAMPER_FILELENM2,
-                               TAG_3
-                              );
-
-    if (result == ERR_NONE)
+    /* This test is expected to fail for valid files with original size less
+       than the size for sections. There is no way to differentiate from
+       original file and overlay. */
+    if (invalid_size_in_sections)
     {
-        printf("pass\n");
+        printf("not tested because peobj64_len != pefixedobj64_len\n");
+    }
+    else
+    {
+        result = validate_tampered("v2test16",
+                                   "vssvtest032",
+                                   context,
+                                   rootdata,
+                                   TAMPER_FILELENM2,
+                                   TAG_3
+                                  );
+
+        if (result == ERR_NONE)
+        {
+            printf("pass\n");
+        }
     }
 
     return result;
@@ -11508,33 +12227,44 @@ static int test_ssv_118(_In_ const PTAGGANTCONTEXT context,
 }
 
 static int test_ssv_119(_In_ const PTAGGANTCONTEXT context,
-                        _In_ const UNSIGNED8 *rootdata
+                        _In_ const UNSIGNED8 *rootdata,
+                        int invalid_size_in_sections
                        )
 {
-    int result;
+    int result = ERR_NONE;
     PTAGGANT taggant;
     int taglast;
     int method;
 
     printf(PR_WIDTH, "(119)testing 32-bit PE file containing good v1 Taggant and digital signature:");
 
-    taggant = NULL;
-    result = validate_taggant("vdstest01",
-                              &taggant,
-                              context,
-                              rootdata,
-                              NULL,
-                              FALSE,
-                              FALSE,
-                              TAGGANT_PEFILE,
-                              &taglast,
-                              &method
-                             );
-    pTaggantFreeTaggant(taggant);
-
-    if (result == ERR_NONE)
+    /* This test is expected to fail for valid files with original size less
+       than the size for sections. There is no way to differentiate from
+       original file and signature padding. */
+    if (invalid_size_in_sections)
     {
-        printf("pass\n");
+        printf("not tested because peobj32_len != pefixedobj32_len\n");
+    }
+    else
+    {
+        taggant = NULL;
+        result = validate_taggant("vdstest01",
+                                  &taggant,
+                                  context,
+                                  rootdata,
+                                  NULL,
+                                  FALSE,
+                                  FALSE,
+                                  TAGGANT_PEFILE,
+                                  &taglast,
+                                  &method
+                                );
+        pTaggantFreeTaggant(taggant);
+
+        if (result == ERR_NONE)
+        {
+            printf("pass\n");
+        }
     }
 
     return result;
@@ -11669,33 +12399,44 @@ static int test_ssv_123(_In_ const PTAGGANTCONTEXT context,
 }
 
 static int test_ssv_124(_In_ const PTAGGANTCONTEXT context,
-                        _In_ const UNSIGNED8 *rootdata
+                        _In_ const UNSIGNED8 *rootdata,
+                        int invalid_size_in_sections
                        )
 {
-    int result;
+    int result = ERR_NONE;
     PTAGGANT taggant;
     int taglast;
     int method;
 
     printf(PR_WIDTH, "(124)testing 64-bit PE file containing good v1 Taggant and digital signature:");
 
-    taggant = NULL;
-    result = validate_taggant("vdstest06",
-                              &taggant,
-                              context,
-                              rootdata,
-                              NULL,
-                              FALSE,
-                              FALSE,
-                              TAGGANT_PEFILE,
-                              &taglast,
-                              &method
-                             );
-    pTaggantFreeTaggant(taggant);
-
-    if (result == ERR_NONE)
+    /* This test is expected to fail for valid files with original size less
+       than the size for sections. There is no way to differentiate from
+       original file and signature padding. */
+    if (invalid_size_in_sections)
     {
-        printf("pass\n");
+        printf("not tested because peobj64_len != pefixedobj64_len\n");
+    }
+    else
+    {
+        taggant = NULL;
+        result = validate_taggant("vdstest06",
+                                  &taggant,
+                                  context,
+                                  rootdata,
+                                  NULL,
+                                  FALSE,
+                                  FALSE,
+                                  TAGGANT_PEFILE,
+                                  &taglast,
+                                  &method
+                                 );
+        pTaggantFreeTaggant(taggant);
+
+        if (result == ERR_NONE)
+        {
+            printf("pass\n");
+        }
     }
 
     return result;
@@ -12070,7 +12811,7 @@ static int test_ssv_138(_In_ const PTAGGANTCONTEXT context,
         {
             result = ERR_BADLIB;
         }
-        else if (result == TMISMATCH)
+		else if (result == TMISMATCH)
         {
             result = ERR_NONE;
         }
@@ -12149,7 +12890,9 @@ static int test_ssv_pe(_In_ const PTAGGANTCONTEXT context,
                        _In_ const UNSIGNED8 *rootdata,
                        _In_ const UNSIGNED8 *tsrootdata,
                        UNSIGNED32 tag32_len,
-                       UNSIGNED32 tag64_len
+                       UNSIGNED32 tag64_len,
+                       int invalid_size_in_sections32,
+                       int invalid_size_in_sections64
                       )
 {
     int result;
@@ -12219,47 +12962,56 @@ static int test_ssv_pe(_In_ const PTAGGANTCONTEXT context,
          ) != ERR_NONE
         )
      || ((result = test_ssv_015(context,
-                                rootdata
+                                rootdata,
+                                invalid_size_in_sections32
                                )
          ) != ERR_NONE
         )
      || ((result = test_ssv_016(context,
-                                rootdata
+                                rootdata,
+                                invalid_size_in_sections32
                                )
          ) != ERR_NONE
         )
      || ((result = test_ssv_017(context,
-                                rootdata
+                                rootdata,
+                                invalid_size_in_sections32
                                )
          ) != ERR_NONE
         )
      || ((result = test_ssv_018(context,
-                                rootdata
+                                rootdata,
+                                invalid_size_in_sections64
                                )
          ) != ERR_NONE
         )
      || ((result = test_ssv_019(context,
-                                rootdata
+                                rootdata,
+                                invalid_size_in_sections64
                                )
          ) != ERR_NONE
         )
      || ((result = test_ssv_020(context,
-                                rootdata
+                                rootdata,
+                                invalid_size_in_sections64
                                )
          ) != ERR_NONE
         )
      || ((result = test_ssv_021(context,
-                                rootdata
+                                rootdata,
+                                invalid_size_in_sections64
                                )
          ) != ERR_NONE
         )
      || ((result = test_ssv_022(context,
-                                rootdata
+                                rootdata,
+                                invalid_size_in_sections64
                                )
          ) != ERR_NONE
         )
      || ((result = test_ssv_023(context,
-                                rootdata
+                                rootdata,
+                                invalid_size_in_sections32
                                )
          ) != ERR_NONE
         )
@@ -12269,7 +13021,8 @@ static int test_ssv_pe(_In_ const PTAGGANTCONTEXT context,
          ) != ERR_NONE
         )
      || ((result = test_ssv_025(context,
-                                rootdata
+                                rootdata,
+                                invalid_size_in_sections32
                                )
          ) != ERR_NONE
         )
@@ -12279,12 +13032,14 @@ static int test_ssv_pe(_In_ const PTAGGANTCONTEXT context,
          ) != ERR_NONE
         )
      || ((result = test_ssv_027(context,
-                                rootdata
+                                rootdata,
+                                invalid_size_in_sections32
                                )
          ) != ERR_NONE
         )
      || ((result = test_ssv_028(context,
-                                rootdata
+                                rootdata,
+                                invalid_size_in_sections64
                                )
          ) != ERR_NONE
         )
@@ -12294,7 +13049,8 @@ static int test_ssv_pe(_In_ const PTAGGANTCONTEXT context,
          ) != ERR_NONE
         )
      || ((result = test_ssv_030(context,
-                                rootdata
+                                rootdata,
+                                invalid_size_in_sections64
                                )
          ) != ERR_NONE
         )
@@ -12304,7 +13060,8 @@ static int test_ssv_pe(_In_ const PTAGGANTCONTEXT context,
          ) != ERR_NONE
         )
      || ((result = test_ssv_032(context,
-                                rootdata
+                                rootdata,
+                                invalid_size_in_sections64
                                )
          ) != ERR_NONE
         )
@@ -12771,7 +13528,8 @@ static int test_ssv_pe(_In_ const PTAGGANTCONTEXT context,
          ) != ERR_NONE
         )
      || ((result = test_ssv_119(context,
-                                rootdata
+                                rootdata,
+                                invalid_size_in_sections32
                                )
          ) != ERR_NONE
         )
@@ -12796,7 +13554,8 @@ static int test_ssv_pe(_In_ const PTAGGANTCONTEXT context,
          ) != ERR_NONE
         )
      || ((result = test_ssv_124(context,
-                                rootdata
+                                rootdata,
+                                invalid_size_in_sections64
                                )
          ) != ERR_NONE
         )
@@ -12902,29 +13661,28 @@ static int test_ssv_js(_In_ const PTAGGANTCONTEXT context,
     return result;
 }
 
-int main(int argc,
-         char *argv[]
-        )
+int perform_tests(int argc, char *argv[], int use_default_object_size, int use_default_file_size)
 {
     int result;
     const UNSIGNED8 *licdata;
-    const UNSIGNED8 *pefile32;
-    UNSIGNED64 pefile32_len;
-    UNSIGNED64 peobj32_len;
-    UNSIGNED64 tag32_off;
-    UNSIGNED32 tag32_len;
-    const UNSIGNED8 *pefile64;
-    UNSIGNED64 pefile64_len;
-    UNSIGNED64 peobj64_len;
-    UNSIGNED64 tag64_off;
-    UNSIGNED32 tag64_len;
-    const UNSIGNED8 *jsfile;
-    UNSIGNED64 jsfile_len;
     HMODULE libspv;
     PTAGGANTCONTEXT context;
     HMODULE libssv;
     const UNSIGNED8 *rootdata;
     const UNSIGNED8 *tsrootdata;
+
+    const UNSIGNED8 *pefile32;
+    UNSIGNED64 pefile32_len;
+    UNSIGNED64 peobj32_len, pefixedobj32_len;
+    UNSIGNED64 tag32_off;
+    UNSIGNED32 tag32_len;
+    const UNSIGNED8 *pefile64;
+    UNSIGNED64 pefile64_len;
+    UNSIGNED64 peobj64_len, pefixedobj64_len;
+    UNSIGNED64 tag64_off;
+    UNSIGNED32 tag64_len;
+    const UNSIGNED8 *jsfile;
+    UNSIGNED64 jsfile_len;
 
     printf("checking SPV parameters\n");
 
@@ -12934,11 +13692,13 @@ int main(int argc,
                                      (UNSIGNED8 **) &pefile32,
                                      &pefile32_len,
                                      &peobj32_len,
+                                     &pefixedobj32_len,
                                      &tag32_off,
                                      &tag32_len,
                                      (UNSIGNED8 **) &pefile64,
                                      &pefile64_len,
                                      &peobj64_len,
+                                     &pefixedobj64_len,
                                      &tag64_off,
                                      &tag64_len,
                                      (UNSIGNED8 **) &jsfile,
@@ -12949,6 +13709,14 @@ int main(int argc,
     {
         return result;
     }
+
+    UNSIGNED64 obj32_len = use_default_object_size ? 0 : peobj32_len;
+    UNSIGNED64 fixedobj32_len = use_default_object_size ? 0 : pefixedobj32_len;
+    UNSIGNED64 obj64_len = use_default_object_size ? 0 : peobj64_len;
+    UNSIGNED64 fixedobj64_len = use_default_object_size ? 0 : pefixedobj64_len;
+
+    UNSIGNED64 v1file32_len = tag32_len ? 0 : pefile32_len;
+    UNSIGNED64 v1file64_len = tag64_len ? 0 : pefile64_len;
 
     printf("loading SPV functions\n");
 
@@ -12981,15 +13749,18 @@ int main(int argc,
         if ((result = test_spv_pe(context,
                                   licdata,
                                   pefile32,
-                                  peobj32_len,
+                                  fixedobj32_len,
                                   pefile32_len,
                                   tag32_off,
                                   tag32_len,
                                   pefile64,
-                                  peobj64_len,
+                                  fixedobj64_len,
                                   pefile64_len,
                                   tag64_off,
-                                  tag64_len
+                                  tag64_len,
+                                  v1file32_len,
+                                  v1file64_len,
+                                  use_default_file_size
                                  )
             ) != ERR_NONE
            )
@@ -13055,10 +13826,10 @@ int main(int argc,
         result = test_spv_eof(context,
                               licdata,
                               pefile32,
-                              peobj32_len,
+                              fixedobj32_len,
                               pefile32_len,
                               pefile64,
-                              peobj64_len,
+                              fixedobj64_len,
                               pefile64_len
                              );
         cleanup_spv(!result,
@@ -13125,7 +13896,9 @@ int main(int argc,
                               rootdata,
                               tsrootdata,
                               tag32_len,
-                              tag64_len
+                              tag64_len,
+                              obj32_len != pefixedobj32_len,
+                              obj64_len != pefixedobj64_len
                              )
         ) != ERR_NONE
        )
@@ -13139,6 +13912,11 @@ int main(int argc,
                     result
                    );
         return result;
+    }
+
+    if (obj32_len != pefixedobj32_len || obj64_len != pefixedobj64_len)
+    {
+        printf("\nWarning! Some PE tests were not performed because peobj_len != pefixedobj_len\n\n");
     }
 
     printf("performing JS validation tests\n");
@@ -13155,6 +13933,42 @@ int main(int argc,
                 result
                );
 
+    if (result != ERR_NONE)
+    {
+        return result;
+    }
+
+    printf("completed verification tests\n");
+    return ERR_NONE;
+}
+
+int main(int argc, char *argv[])
+{
+    int result;
+
+    /* tests with calculated object end and calculated file end */
+    result = perform_tests(argc, argv, 0, 0);
+    if (result != ERR_NONE)
+    {
+        return result;
+    }
+
+    /* tests with calculated object end and default file end */
+    result = perform_tests(argc, argv, 0, 1);
+    if (result != ERR_NONE)
+    {
+        return result;
+    }
+
+    /* tests with default object end and calculated file end */
+    result = perform_tests(argc, argv, 1, 0);
+    if (result != ERR_NONE)
+    {
+        return result;
+    }
+
+    /* tests with default object end and default file end */
+    result = perform_tests(argc, argv, 1, 1);
     if (result != ERR_NONE)
     {
         return result;

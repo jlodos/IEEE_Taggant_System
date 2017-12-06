@@ -1,6 +1,6 @@
 File description:
 obsidium_martin_test_1.exe:
-Existing file.
+Existing file. Has length in section 1 byte greater then real length. Has a v1 taggant.
 
 obsidium_martin_test_1a.exe:
 Existing obsidium_martin_test_1.exe plus an extra byte and a new v1 taggant in the same position.
@@ -16,5 +16,4 @@ Windows 32 bit notepad with a v1 taggant added at the end.
 
 notepad64.exe:
 Windows 32 bit notepad with a v1 taggant added at the end.
-
 

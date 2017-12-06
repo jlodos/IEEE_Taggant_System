@@ -660,11 +660,10 @@ EXPORT UNSIGNED32 STDCALL TaggantComputeHashes(__in PTAGGANTCONTEXT pCtx, __inou
                         if (!objectend)
                         {
                             objectend = winpe2_object_end(pCtx, hFile, &peh);
-                            if (found && objectend > fileend)
+                            if (objectend > fileend)
                             {
-                                /* There were was at least a taggant.
-                                   It is possible the taggant was added to a file with a length
-                                   less than the expected because of last section alignment. */
+                                /* It is possible the file has a length less than the expected
+                                   because of last section alignment. */
                                 objectend = fileend;
                             }
                         }

@@ -7,9 +7,4 @@
   <ItemGroup>
     <ClInclude Include="fileio.h" />
   </ItemGroup>
-  <ItemGroup>
-    <Filter Include="TaggantLibrary">
-      <UniqueIdentifier>{6db9d2ba-df04-4884-82e6-422e447c3cbb}</UniqueIdentifier>
-    </Filter>
-  </ItemGroup>
 </Project>
