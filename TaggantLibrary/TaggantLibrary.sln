@@ -7,6 +7,8 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "TaggantLibrary", "TaggantLi
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		SPV_Seal_Shared_Debug|x64 = SPV_Seal_Shared_Debug|x64
+		SPV_Seal_Shared_Debug|x86 = SPV_Seal_Shared_Debug|x86
 		SPV_Seal_Shared_Small|x64 = SPV_Seal_Shared_Small|x64
 		SPV_Seal_Shared_Small|x86 = SPV_Seal_Shared_Small|x86
 		SPV_Seal_Shared|x64 = SPV_Seal_Shared|x64
@@ -27,6 +29,8 @@ Global
 		SPV_Static_Small|x86 = SPV_Static_Small|x86
 		SPV_Static|x64 = SPV_Static|x64
 		SPV_Static|x86 = SPV_Static|x86
+		SSV_Seal_Shared_Debug|x64 = SSV_Seal_Shared_Debug|x64
+		SSV_Seal_Shared_Debug|x86 = SSV_Seal_Shared_Debug|x86
 		SSV_Seal_Shared_Small|x64 = SSV_Seal_Shared_Small|x64
 		SSV_Seal_Shared_Small|x86 = SSV_Seal_Shared_Small|x86
 		SSV_Seal_Shared|x64 = SSV_Seal_Shared|x64
@@ -49,6 +53,10 @@ Global
 		SSV_Static|x86 = SSV_Static|x86
 	EndGlobalSection
 	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{60357DE7-4860-4B6B-837C-457C2DD17791}.SPV_Seal_Shared_Debug|x64.ActiveCfg = SPV_Seal_Shared_Debug|x64
+		{60357DE7-4860-4B6B-837C-457C2DD17791}.SPV_Seal_Shared_Debug|x64.Build.0 = SPV_Seal_Shared_Debug|x64
+		{60357DE7-4860-4B6B-837C-457C2DD17791}.SPV_Seal_Shared_Debug|x86.ActiveCfg = SPV_Seal_Shared_Debug|Win32
+		{60357DE7-4860-4B6B-837C-457C2DD17791}.SPV_Seal_Shared_Debug|x86.Build.0 = SPV_Seal_Shared_Debug|Win32
 		{60357DE7-4860-4B6B-837C-457C2DD17791}.SPV_Seal_Shared_Small|x64.ActiveCfg = SPV_Seal_Shared_Small|x64
 		{60357DE7-4860-4B6B-837C-457C2DD17791}.SPV_Seal_Shared_Small|x64.Build.0 = SPV_Seal_Shared_Small|x64
 		{60357DE7-4860-4B6B-837C-457C2DD17791}.SPV_Seal_Shared_Small|x86.ActiveCfg = SPV_Seal_Shared_Small|Win32
@@ -89,6 +97,10 @@ Global
 		{60357DE7-4860-4B6B-837C-457C2DD17791}.SPV_Static|x64.Build.0 = SPV_Static|x64
 		{60357DE7-4860-4B6B-837C-457C2DD17791}.SPV_Static|x86.ActiveCfg = SPV_Static|Win32
 		{60357DE7-4860-4B6B-837C-457C2DD17791}.SPV_Static|x86.Build.0 = SPV_Static|Win32
+		{60357DE7-4860-4B6B-837C-457C2DD17791}.SSV_Seal_Shared_Debug|x64.ActiveCfg = SSV_Seal_Shared_Debug|x64
+		{60357DE7-4860-4B6B-837C-457C2DD17791}.SSV_Seal_Shared_Debug|x64.Build.0 = SSV_Seal_Shared_Debug|x64
+		{60357DE7-4860-4B6B-837C-457C2DD17791}.SSV_Seal_Shared_Debug|x86.ActiveCfg = SSV_Seal_Shared_Debug|Win32
+		{60357DE7-4860-4B6B-837C-457C2DD17791}.SSV_Seal_Shared_Debug|x86.Build.0 = SSV_Seal_Shared_Debug|Win32
 		{60357DE7-4860-4B6B-837C-457C2DD17791}.SSV_Seal_Shared_Small|x64.ActiveCfg = SSV_Seal_Shared_Small|x64
 		{60357DE7-4860-4B6B-837C-457C2DD17791}.SSV_Seal_Shared_Small|x64.Build.0 = SSV_Seal_Shared_Small|x64
 		{60357DE7-4860-4B6B-837C-457C2DD17791}.SSV_Seal_Shared_Small|x86.ActiveCfg = SSV_Seal_Shared_Small|Win32

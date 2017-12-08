@@ -107,6 +107,7 @@ EXPORT void STDCALL TaggantObjectFree(__deref PTAGGANTOBJ pTaggantObj);
 EXPORT PTAGGANTCONTEXT STDCALL TaggantContextNew(void);
 EXPORT __success(return == TNOERR) UNSIGNED32 STDCALL TaggantContextNewEx(__out PTAGGANTCONTEXT *pCtx);
 EXPORT void STDCALL TaggantContextFree(__deref PTAGGANTCONTEXT pTaggantCtx);
+EXPORT UNSIGNED32 STDCALL TaggantCheckCertificate(__in PVOID pCert);
 
 /* Deprecated function, use TaggantGetInfo/TaggantPutInfo with EPACKERINFO parameter instead */
 EXPORT DEPRECATED PPACKERINFO STDCALL TaggantPackerInfo(__in PTAGGANTOBJ pTaggantObj);
@@ -120,7 +121,6 @@ EXPORT void STDCALL TaggantFreeTaggant(__deref PTAGGANT pTaggant);
 EXPORT UNSIGNED32 STDCALL TaggantValidateSignature(__in PTAGGANTOBJ pTaggantObj, __in PTAGGANT pTaggant, __in PVOID pRootCert);
 EXPORT UNSIGNED32 STDCALL TaggantGetInfo(__in PTAGGANTOBJ pTaggantObj, ENUMTAGINFO eKey, __inout UNSIGNED32 *pSize, __out_bcount_full_opt(*pSize) PINFO pInfo);
 EXPORT __success(return == TNOERR) UNSIGNED32 STDCALL TaggantGetTimestamp(__in PTAGGANTOBJ pTaggantObj, __out UNSIGNED64 *pTime, __in PVOID pTSRootCert);
-EXPORT UNSIGNED32 STDCALL TaggantCheckCertificate(__in PVOID pCert);
 #endif
 
 #ifdef SPV_LIBRARY

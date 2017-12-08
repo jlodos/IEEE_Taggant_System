@@ -239,6 +239,7 @@ enum
     LVL_FREEROOT = LVL_FREELIC,
     LVL_FREEPE32,
     LVL_FREEPE64,
+    LVL_FREEJS,
     LVL_FREEDLL,
     LVL_FINALISE,
 };
@@ -388,9 +389,21 @@ static void print_tagerr(int err)
             break;
         }
 
+        case TNOTIMPLEMENTED:
+        {
+            printf("the required functionality is not implemented\n");
+            break;
+        }
+
         case TNOTFOUND:
         {
             printf("the requested tag does not exist\n");
+            break;
+        }
+
+        case TINVALIDJSONFILE:
+        {
+            printf("invalid JSON file\n");
             break;
         }
 
@@ -444,7 +457,8 @@ static const char *spv_files[] =
     "v2test45",    "v2test46",       "v2test47",       "v2test48",       "v2test49",       "v2test50",       "v2test51",    "v2test52",
     "v2test55",    "v2test56",       "v2test57",       "v2test58",       "v2test59",       "v2test60",       "v2test61",    "v2test62",
     "v2test63",    "v2test64",       "v2test65",       "vdstest01",      "vdstest02",      "vdstest03",      "vdstest04",   "vdstest05",
-    "vdstest06",   "vdstest07",      "vdstest08",      "vdstest09",      "vdstest10",      "veoftest01",     "veoftest02"
+    "vdstest06",   "vdstest07",      "vdstest08",      "vdstest09",      "vdstest10",      "veoftest01",     "veoftest02",  "v3test01",
+    "v3test02",    "v3test03"
 };
 
 static void delete_spv(void)
@@ -521,6 +535,10 @@ static void cleanup_spv(int keepfiles,
                                HMODULE
                               )
                        );
+        } /* fall through */
+
+        case LVL_FREEJS:
+        {
             free(va_arg(arg,
                         PVOID /* jsfile */
                        )
@@ -675,13 +693,14 @@ static void cleanup_ssv(int level,
 }
 
 static int read_data_file(_In_z_ const char *filename,
-                          _Inout_ UNSIGNED8 **pdata,
+                          _Out_ UNSIGNED8 **pdata,
                           UNSIGNED64 *pdata_len
                          )
 {
     FILE *infile;
     long filelen;
-    UNSIGNED8 *data;
+
+    *pdata = NULL;
 
     if (fopen_s(&infile,
                 filename,
@@ -711,7 +730,7 @@ static int read_data_file(_In_z_ const char *filename,
         return ERR_BADFILE;
     }
 
-    if ((data = (UNSIGNED8 *) malloc(filelen = *pdata_len = ftell(infile))) == NULL)
+    if ((*pdata = (UNSIGNED8 *) malloc(filelen = *pdata_len = ftell(infile))) == NULL)
     {
         cleanup_spv(TRUE,
                     LVL_CLOSEDATA,
@@ -725,7 +744,7 @@ static int read_data_file(_In_z_ const char *filename,
               0,
               SEEK_SET
              )
-     || ((long) fread(data,
+     || ((long) fread(*pdata,
                       1,
                       filelen,
                       infile
@@ -735,7 +754,7 @@ static int read_data_file(_In_z_ const char *filename,
     {
         cleanup_spv(TRUE,
                     LVL_FREELIC,
-                    data,
+                    *pdata,
                     infile,
                     ERR_BADREAD
                    );
@@ -743,7 +762,6 @@ static int read_data_file(_In_z_ const char *filename,
     }
 
     fclose(infile);
-    *pdata = data;
     return ERR_NONE;
 }
 
@@ -1396,7 +1414,8 @@ static int object_sizes(_In_reads_(pefile_len) const UNSIGNED8 *pefile,
 
 static void print_usage(void)
 {
-    printf("usage: test <license.pem> <PE-32 file> <PE-64 file> <JS file> <root.crt> <tsroot.crt>\n"
+    printf("usage: test <license.pem> <PE-32 file> <PE-64 file> <JS file>\n"
+           "            <IEEERoot.pem> <TSRoot.pem> <JSON seal> <AppEsteemRoot.pem>\n"
            "PE file must be prepared to receive either v1 or v2 Taggant\n"
            "(requires either reserved space containing Taggant footer, or Taggant v1 offset=EOF)\n"
           );
@@ -1418,18 +1437,20 @@ static int validate_spv_parms(int argc,
                               UNSIGNED64 *ptag64_off,
                               UNSIGNED32 *ptag64_len,
                               UNSIGNED8 **pjsfile,
-                              UNSIGNED64 *pjsfile_len
+                              UNSIGNED64 *pjsfile_len,
+                              UNSIGNED8 **paerootdata
                              )
 {
     int result;
+    UNSIGNED64 tmp_len;
 
     result = ERR_BADOPEN;
 
-    if (argc == 7)
+    if (argc == 9)
     {
         if ((result = read_data_file(argv[1],
                                      plicdata,
-                                     ppefile32_len
+                                     &tmp_len
                                     )
             ) != ERR_NONE
            )
@@ -1517,6 +1538,23 @@ static int validate_spv_parms(int argc,
                         0
                        );
         }
+        else if ((result = read_data_file(argv[8],
+                                          paerootdata,
+                                          &tmp_len
+                                         )
+                 ) != ERR_NONE
+                )
+        {
+            cleanup_spv(TRUE,
+                        LVL_FREEJS,
+                        *pjsfile,
+                        *ppefile64,
+                        *ppefile32,
+                        *plicdata,
+                        0,
+                        0
+                       );
+        }
     }
 
     if (result)
@@ -1528,8 +1566,8 @@ static int validate_spv_parms(int argc,
 }
 
 static int validate_ssv_parms(_In_ char *argv[],
-                              UNSIGNED8 **prootdata,
-                              UNSIGNED8 **ptsrootdata
+                              UNSIGNED8 **pprootdata,
+                              UNSIGNED8 **pptsrootdata
                              )
 {
     int result;
@@ -1538,7 +1576,7 @@ static int validate_ssv_parms(_In_ char *argv[],
     result = ERR_BADOPEN;
 
     if ((result = read_data_file(argv[5],
-                                 prootdata,
+                                 pprootdata,
                                  &file_len
                                 )
         ) != ERR_NONE
@@ -1546,7 +1584,7 @@ static int validate_ssv_parms(_In_ char *argv[],
     {
     }
     else if ((result = read_data_file(argv[6],
-                                      ptsrootdata,
+                                      pptsrootdata,
                                       &file_len
                                      )
              ) != ERR_NONE
@@ -1554,7 +1592,7 @@ static int validate_ssv_parms(_In_ char *argv[],
     {
         cleanup_ssv(TRUE,
                     LVL_FREEROOT,
-                    *prootdata,
+                    *pprootdata,
                     0,
                     0
                    );
@@ -1659,6 +1697,7 @@ static int init_post_library(int mode,
                              _In_opt_z_ const UNSIGNED8 *licdata,
                              _In_opt_ const UNSIGNED8 *rootdata,
                              _In_opt_ const UNSIGNED8 *tsrootdata,
+                             _In_opt_ const UNSIGNED8 *aerootdata,
                              _Inout_updates_(1) PTAGGANTCONTEXT *pcontext
                             )
 {
@@ -1682,9 +1721,11 @@ static int init_post_library(int mode,
 
     if (((mode == MODE_SPV)
       && (!licdata
+       || !aerootdata
        || ((result = pTaggantGetLicenseExpirationDate(licdata,
                                                       &ltime
                                                      )
+       || ((result = pTaggantCheckCertificate(aerootdata)) != TNOERR)
            ) != TNOERR
           )
          )
@@ -1715,6 +1756,7 @@ static int init_spv_library(_In_ const char *dllname,
                             _Out_writes_(1) HMODULE *plibspv,
                             UNSIGNED64 reqver,
                             _In_z_ const UNSIGNED8 *licdata,
+                            _In_z_ const UNSIGNED8 *aerootdata,
                             PTAGGANTCONTEXT *pcontext
                            )
 {
@@ -1788,6 +1830,12 @@ static int init_spv_library(_In_ const char *dllname,
                                             )
          ) == NULL
         )
+     || ((pTaggantCheckCertificate = (UNSIGNED32 (STDCALL *) (const PVOID)
+                            ) GetProcAddress(libspv,
+                                             "TaggantCheckCertificate"
+                                            )
+         ) == NULL
+        )
        )
     {
         return ERR_BADLIB;
@@ -1798,6 +1846,7 @@ static int init_spv_library(_In_ const char *dllname,
                              licdata,
                              NULL,
                              NULL,
+                             aerootdata,
                              pcontext
                             );
 }
@@ -1908,6 +1957,7 @@ static int init_ssv_library(_In_z_ const char *dllname,
                              NULL,
                              rootdata,
                              tsrootdata,
+                             NULL,
                              pcontext
                             );
 }
@@ -2152,6 +2202,7 @@ static int add_hashmap(_In_ FILE *tagfile,
 }
 
 static int create_taggant(_In_z_ const char *filename,
+                          const char *outfilename,
                           _In_ const PTAGGANTCONTEXT context,
                           UNSIGNED64 version,
                           TAGGANTCONTAINER tagtype, 
@@ -2294,21 +2345,32 @@ static int create_taggant(_In_z_ const char *filename,
 
                         if (result == ERR_NONE)
                         {
-                            result = ERR_BADFILE;
-
-                            if (!fseek(tagfile,
-                                       (long) tag_off,
-                                       (version == TAGGANT_LIBRARY_VERSION1) ? SEEK_SET : SEEK_END
-                                      )
-                             && (fwrite(taggant,
-                                        1,
-                                        tag_len,
-                                        tagfile
-                                       ) == tag_len
-                                )
-                               )
+                            if (outfilename)
                             {
-                                result = ERR_NONE;
+                                fclose(tagfile);
+                                tagfile = NULL;
+                                if (fopen_s(&tagfile, outfilename, "wb+") || !tagfile)
+                                {
+                                    result = ERR_BADFILE;
+                                }
+                            }
+                            if (result == ERR_NONE)
+                            {
+                                result = ERR_BADFILE;
+                                if (!fseek(tagfile,
+                                           (long) tag_off,
+                                           (version == TAGGANT_LIBRARY_VERSION1) ? SEEK_SET : SEEK_END
+                                          )
+                                 && (fwrite(taggant,
+                                            1,
+                                            tag_len,
+                                            tagfile
+                                           ) == tag_len
+                                    )
+                                   )
+                                {
+                                    result = ERR_NONE;
+                                }
                             }
                         }
 
@@ -2320,7 +2382,8 @@ static int create_taggant(_In_z_ const char *filename,
             pTaggantObjectFree(object);
         }
 
-        fclose(tagfile);
+        if (tagfile)
+            fclose(tagfile);
     }
 
     return result;
@@ -2339,6 +2402,7 @@ static int create_v1_taggant(_In_z_ const char *filename,
                             )
 {
     return create_taggant(filename,
+                          NULL,
                           context,
                           TAGGANT_LIBRARY_VERSION1,
                           TAGGANT_PEFILE, 
@@ -2427,6 +2491,7 @@ static int create_v2_taggant(_In_z_ const char *filename,
                             )
 {
     return create_taggant(filename,
+                          NULL,
                           context,
                           TAGGANT_LIBRARY_VERSION2,
                           tagtype, 
@@ -3039,6 +3104,93 @@ static int create_bad_v2_hmh(_In_z_ const char *filename1,
                                      FALSE,
                                      FALSE
                                     );
+}
+
+static int create_v3_taggant(_In_z_ const char *jsonfilename,
+                             _In_z_ const char *outfilename,
+                             _In_ const PTAGGANTCONTEXT context,
+                             _In_z_ const UNSIGNED8 *licdata,
+                             int puttime,
+                             int filleb
+                            )
+{
+    return create_taggant(jsonfilename,
+                          outfilename,
+                          context,
+                          TAGGANT_LIBRARY_VERSION3,
+                          TAGGANT_PESEALFILE, 
+                          licdata,
+                          0,
+                          0,
+                          0,
+                          0,
+                          0,
+                          0,
+                          puttime,
+                          filleb
+                         );
+}
+
+
+static int create_tmp_v3_taggant(_In_z_ const char *filename,
+                                 _In_z_ const char *taggantfilename,
+                                 _In_ const PTAGGANTCONTEXT context,
+                                 _In_z_ const UNSIGNED8 *licdata,
+                                 _In_reads_(tmpfile_len) const UNSIGNED8 *tmpfile,
+                                 UNSIGNED64 tmpfile_len
+                                )
+{
+    int result;
+    FILE *tagfile;
+    UNSIGNED8 *ptagdata;
+    UNSIGNED64 taglen;
+
+    if ((result = create_tmp_file(filename,
+                                  tmpfile,
+                                  tmpfile_len
+                                 )
+        ) == ERR_NONE
+       )
+    {
+        if ((result = read_data_file(taggantfilename,
+                                     &ptagdata,
+                                     &taglen
+                                    )
+            ) == ERR_NONE
+           )
+        {
+            result = ERR_BADFILE;
+
+            if (!fopen_s(&tagfile,
+                         filename,
+                         "a"
+                        )
+                 && tagfile
+               )
+            {
+                if (fwrite(ptagdata,
+                           1,
+                           (size_t)taglen,
+                           tagfile
+                          ) == taglen
+                   )
+                {
+                    result = ERR_NONE;
+                }
+
+                fclose(tagfile);
+            }
+
+            free(ptagdata);
+
+			if (result == ERR_NONE)
+            {
+//todo: sign
+            }
+        }
+    }
+
+    return result;
 }
 
 static int duplicate_tag(_In_z_ const char *filename,
@@ -6404,6 +6556,83 @@ static int test_spv_v265(_In_ const PTAGGANTCONTEXT context,
     return result;
 }
 
+static int test_spv_v301(_In_ const PTAGGANTCONTEXT context,
+                         _In_z_ const UNSIGNED8 *licdata,
+                         _In_z_ const char *jsonfilename
+                        )
+{
+    int result;
+
+    printf(PR_WIDTH, "v3test01: create v3 Taggant:");
+
+    result = create_v3_taggant(jsonfilename,
+                               "v3test01",
+                               context,
+                               licdata,
+                               FALSE,
+                               FALSE
+                              );
+
+    if (result == ERR_NONE)
+    {
+        printf("pass\n");
+    }
+
+    return result;
+}
+
+static int test_spv_v302(_In_ const PTAGGANTCONTEXT context,
+                         _In_z_ const UNSIGNED8 *licdata,
+                         _In_reads_(pefile_len) const UNSIGNED8 *pefile,
+                         UNSIGNED64 pefile_len
+                        )
+{
+    int result;
+
+    printf(PR_WIDTH, "v3test02: add v3 Taggant to 32-bit PE file:");
+
+    result = create_tmp_v3_taggant("v3test02",
+                                   "v3test01",
+                                   context,
+                                   licdata,
+                                   pefile,
+                                   pefile_len
+                                  );
+
+    if (result == ERR_NONE)
+    {
+        printf("pass\n");
+    }
+
+    return result;
+}
+
+static int test_spv_v303(_In_ const PTAGGANTCONTEXT context,
+                         _In_z_ const UNSIGNED8 *licdata,
+                         _In_reads_(pefile_len) const UNSIGNED8 *pefile,
+                         UNSIGNED64 pefile_len
+                        )
+{
+    int result;
+
+    printf(PR_WIDTH, "v3test03: add v3 Taggant to 64-bit PE file:");
+
+    result = create_tmp_v3_taggant("v3test03",
+                                   "v3test01",
+                                   context,
+                                   licdata,
+                                   pefile,
+                                   pefile_len
+                                  );
+
+    if (result == ERR_NONE)
+    {
+        printf("pass\n");
+    }
+
+    return result;
+}
+
 static int test_spv_ds01(void)
 {
     int result;
@@ -6662,7 +6891,8 @@ static int test_spv_pe(_In_ const PTAGGANTCONTEXT context,
                        UNSIGNED32 tag64_len,
                        UNSIGNED64 v1file32_len,
                        UNSIGNED64 v1file64_len,
-                       int use_default_file_size
+                       int use_default_file_size,
+                       _In_z_ const char *jsonfilename
                       )
 {
     int result;
@@ -7319,6 +7549,26 @@ static int test_spv_pe(_In_ const PTAGGANTCONTEXT context,
         )
      || ((result = test_spv_v265(context,
                                  licdata
+                                )
+         ) != ERR_NONE
+        )
+     || ((result = test_spv_v301(context,
+                                 licdata,
+                                 jsonfilename
+                                )
+         ) != ERR_NONE
+        )
+     || ((result = test_spv_v302(context,
+                                 licdata,
+                                 pefile32,
+                                 pefile32_len
+                                )
+         ) != ERR_NONE
+        )
+     || ((result = test_spv_v303(context,
+                                 licdata,
+                                 pefile64,
+                                 pefile64_len
                                 )
          ) != ERR_NONE
         )
@@ -13670,6 +13920,7 @@ int perform_tests(int argc, char *argv[], int use_default_object_size, int use_d
     HMODULE libssv;
     const UNSIGNED8 *rootdata;
     const UNSIGNED8 *tsrootdata;
+    const UNSIGNED8 *aerootdata;
 
     const UNSIGNED8 *pefile32;
     UNSIGNED64 pefile32_len;
@@ -13702,7 +13953,8 @@ int perform_tests(int argc, char *argv[], int use_default_object_size, int use_d
                                      &tag64_off,
                                      &tag64_len,
                                      (UNSIGNED8 **) &jsfile,
-                                     &jsfile_len
+                                     &jsfile_len,
+                                     (UNSIGNED8 **) &aerootdata
                                     )
         ) != ERR_NONE
        )
@@ -13724,6 +13976,7 @@ int perform_tests(int argc, char *argv[], int use_default_object_size, int use_d
                                    &libspv,
                                    TAGGANT_LIBRARY_VERSION2,
                                    licdata,
+                                   aerootdata,
                                    &context
                                   )
         ) != ERR_NONE
@@ -13760,7 +14013,8 @@ int perform_tests(int argc, char *argv[], int use_default_object_size, int use_d
                                   tag64_len,
                                   v1file32_len,
                                   v1file64_len,
-                                  use_default_file_size
+                                  use_default_file_size,
+                                  argv[7]
                                  )
             ) != ERR_NONE
            )

@@ -765,7 +765,7 @@ EXPORT UNSIGNED32 STDCALL TaggantComputeHashes(__in PTAGGANTCONTEXT pCtx, __inou
                 if (sealinfo)
                 {
                     sealinfosize = strlen(sealinfo);
-                    res = taggant2_put_extrainfo(&pTaggantObj->tagObj2->tagBlob.Extrablob, ESEALINFO, sealinfosize, sealinfo);
+                    res = taggant2_put_extrainfo(&pTaggantObj->tagObj2->tagBlob.Extrablob, ESEALINFO, (UNSIGNED32)sealinfosize, sealinfo);
                     memory_free(sealinfo);
                 }
                 else
@@ -1162,6 +1162,48 @@ EXPORT void STDCALL TaggantContextFree(__deref PTAGGANTCONTEXT pTaggantCtx)
     return;
 }
 
+EXPORT UNSIGNED32 STDCALL TaggantCheckCertificate(__in PVOID pCert)
+{
+    BIO* certbio = NULL;
+    X509* cert = NULL;
+    UNSIGNED32 res;
+
+    if (!lib_initialized)
+    {
+        return TLIBNOTINIT;
+    }
+
+    /* Check if certificate buffer is empty */
+    if (!pCert)
+    {
+        return TINVALID;
+    }
+
+    /* Load certificate to bio */
+    res = TMEMORY;
+    certbio = BIO_new(BIO_s_mem());
+    if (certbio)
+    {
+        res = TINVALID;
+        BIO_write(certbio, pCert, (int)strlen((const char*)pCert));
+
+        /* Load certificate */
+        cert = PEM_read_bio_X509(certbio, NULL, 0, NULL);
+        if (cert)
+        {
+            /* Certificate is valid */
+            res = TNOERR;
+
+            /* Free certificate */
+            X509_free(cert);
+        }
+        /* Free bio */
+        BIO_free(certbio);
+    }
+
+    return res;
+}
+
 #ifdef SPV_LIBRARY
 
 EXPORT __success(return == TNOERR) UNSIGNED32 STDCALL TaggantGetLicenseExpirationDate(__in const PVOID pLicense, __out UNSIGNED64 *pTime)
@@ -1231,52 +1273,6 @@ EXPORT __success(return == TNOERR) UNSIGNED32 STDCALL TaggantGetLicenseExpiratio
         }
         BIO_free(licbio);
     }
-    return res;
-}
-
-#endif
-
-#ifdef SSV_LIBRARY
-
-EXPORT UNSIGNED32 STDCALL TaggantCheckCertificate(__in PVOID pCert)
-{
-    BIO* certbio = NULL;
-    X509* cert = NULL;
-    UNSIGNED32 res;
-
-    if (!lib_initialized)
-    {
-        return TLIBNOTINIT;
-    }
-
-    /* Check if certificate buffer is empty */
-    if (!pCert)
-    {
-        return TINVALID;
-    }
-
-    /* Load certificate to bio */
-    res = TMEMORY;
-    certbio = BIO_new(BIO_s_mem());
-    if (certbio)
-    {
-        res = TINVALID;
-        BIO_write(certbio, pCert, (int)strlen((const char*)pCert));
-
-        /* Load certificate */
-        cert = PEM_read_bio_X509(certbio, NULL, 0, NULL);
-        if (cert)
-        {
-            /* Certificate is valid */
-            res = TNOERR;
-
-            /* Free certificate */
-            X509_free(cert);
-        }
-        /* Free bio */
-        BIO_free(certbio);
-    }
-
     return res;
 }
 
