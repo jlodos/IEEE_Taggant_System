@@ -1,0 +1,48 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="Header Files">
+      <UniqueIdentifier>{35584378-2136-4c78-b64a-148fa82c7856}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files">
+      <UniqueIdentifier>{d02fd84d-5020-406c-8bc2-ff2b43bc2b24}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="test.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="lib_util.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="pe_util.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="file_util.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="spv_util.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="ssv_util.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="lib_util.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="pe_util.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="file_util.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="spv_util.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="ssv_util.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+  </ItemGroup>
+</Project>
