@@ -252,6 +252,8 @@ int create_v3_taggant(_In_z_ const char *jsonfilename,
 int create_tmp_v3_taggant(_In_z_ const char *filename,
                           _In_z_ const char *jsonfilename,
                           _In_z_ const char *taggantfilename,
+                          _In_z_ const char *certfilename,
+                          _In_z_ const char *certpwd,
                           _In_reads_(tmpfile_len) const UNSIGNED8 *tmpfile,
                           UNSIGNED64 tmpfile_len
                          );

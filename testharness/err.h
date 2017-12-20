@@ -74,6 +74,7 @@ enum
     ERR_BADLIB,
     ERR_BADLIBVER,
     ERR_BADFILE,
+    ERR_BADSIGNATURE,
 };
 
 #endif

@@ -1347,8 +1347,11 @@ UNSIGNED64 taggant_size_after_object_end(PTAGGANTCONTEXT pCtx, PFILEOBJECT hFile
     }
     if (objectend)
     {
-        /* exclude v2 taggants */
-        while (taggant2_read_binary(pCtx, hFile, objectend, &taggant2, TAGGANT_PEFILE) == TNOERR)
+        /* exclude v2 and v3 taggants */
+        while (
+               taggant2_read_binary(pCtx, hFile, objectend, &taggant2, TAGGANT_PEFILE) == TNOERR ||
+               taggant2_read_binary(pCtx, hFile, objectend, &taggant2, TAGGANT_PESEALFILE) == TNOERR
+              )
         {
             taggant_found = 1;
             objectend -= taggant2->Header.TaggantLength;

@@ -95,7 +95,7 @@
 
     __declspec(dllimport) int __stdcall FreeLibrary(_In_ HMODULE hLibModule);
 #else
-
+    /* todo: */
 #endif
 
 #define PR_WIDTH "%-140s"
@@ -437,6 +437,7 @@ static void cleanup_spv(int keepfiles,
                               )
                        );
 #else
+            /* todo: implement */
 #endif
         } /* fall through */
 
@@ -544,6 +545,7 @@ static void cleanup_ssv(int level,
                               )
                        );
 #else
+            /* todo: implement */
 #endif
             free(va_arg(arg,
                         PVOID /* tsrootdata */
@@ -598,55 +600,13 @@ static void cleanup_ssv(int level,
     va_end(arg);
 }
 
-#if !defined(BIG_ENDIAN)
-#define read_le16(offset) (*((UNSIGNED16 *) (offset)))
-#define read_le32(offset) (*((UNSIGNED32 *) (offset)))
-#define read_le64(offset) (*((UNSIGNED64 *) (offset)))
-#define write_le16(offset, value) (*((UNSIGNED16 *) (offset)) = (UINT16)(value))
-#define write_le32(offset, value) (*((UNSIGNED32 *) (offset)) = (UINT32)(value))
-#define write_le64(offset, value) (*((UNSIGNED64 *) (offset)) = (UINT64)(value))
-#else
-#define read_le16(offset) (((unsigned int) *((PINFO) (offset) + 1) << 8) \
-                         + *((PINFO) (offset) + 0) \
-                          )
-#define read_le32(offset) (((UNSIGNED32) *((PINFO) (offset) + 3) << 0x18) \
-                         + ((UNSIGNED32) *((PINFO) (offset) + 2) << 0x10) \
-                         + ((UNSIGNED32) *((PINFO) (offset) + 1) << 0x08) \
-                         + *((PINFO) (offset) + 0) \
-                          )
-#define read_le64(offset) (((UNSIGNED64) *((PINFO) (offset) + 7) << 0x38) \
-                         + ((UNSIGNED64) *((PINFO) (offset) + 6) << 0x30) \
-                         + ((UNSIGNED64) *((PINFO) (offset) + 5) << 0x28) \
-                         + ((UNSIGNED64) *((PINFO) (offset) + 4) << 0x20) \
-                         + ((UNSIGNED64) *((PINFO) (offset) + 3) << 0x18) \
-                         + ((UNSIGNED64) *((PINFO) (offset) + 2) << 0x10) \
-                         + ((UNSIGNED64) *((PINFO) (offset) + 1) << 0x08) \
-                         + *((PINFO) (offset) + 0) \
-                          )
-#define write_le16(offset, value) (*((UNSIGNED16 *) (offset)) = (((UNSIGNED16)(value) & 0x00ff) << 8) \
-                                                              + (((UNSIGNED16)(value) & 0xff00) >> 8) \
-                                  )
-#define write_le32(offset, value) (*((UNSIGNED32 *) (offset)) = (((UNSIGNED32)(value) & 0x000000ff) << 24) \
-                                                              + (((UNSIGNED32)(value) & 0x0000ff00) << 8)  \
-                                                              + (((UNSIGNED32)(value) & 0x00ff0000) >> 8)  \
-                                                              + (((UNSIGNED32)(value) & 0xff000000) >> 24) \
-                                  )
-#define write_le64(offset, value) (*((UNSIGNED64 *) (offset)) = (((UNSIGNED64)(value) & 0x00000000000000fful) << 56) \
-                                                              + (((UNSIGNED64)(value) & 0x000000000000ff00ul) << 40) \
-                                                              + (((UNSIGNED64)(value) & 0x0000000000ff0000ul) << 24) \
-                                                              + (((UNSIGNED64)(value) & 0x00000000ff000000ul) << 8)  \
-                                                              + (((UNSIGNED64)(value) & 0x000000ff00000000ul) >> 8)  \
-                                                              + (((UNSIGNED64)(value) & 0x0000ff0000000000ul) << 24) \
-                                                              + (((UNSIGNED64)(value) & 0x00ff000000000000ul) >> 40) \
-                                                              + (((UNSIGNED64)(value) & 0xff00000000000000ul) >> 56) \
-                                  )
-#endif
-
 static void print_usage(void)
 {
-    printf("usage: test <license.pem> <PE-32 file> <PE-64 file> <JS file>\n"
-           "            <IEEERoot.pem> <TSRoot.pem> <JSON seal> <AppEsteemRoot.pem>\n"
-           "PE file must be prepared to receive either v1 or v2 Taggant\n"
+    printf("Usage:\n"
+           "  test <license.pem> <PE32 file> <PE64 file> <JS file> <IEEERoot.pem>\n"
+           "       <TSRoot.pem> <JSON seal> <AppEsteemRoot.pem>\n"
+           "       <Sign.pfx> <pfx password>\n"
+		   "PE file must be prepared to receive either v1 or v2 Taggant\n"
            "(requires either reserved space containing Taggant footer, or Taggant v1 offset=EOF)\n"
           );
 }
@@ -676,7 +636,7 @@ static int validate_spv_parms(int argc,
 
     result = ERR_BADOPEN;
 
-    if (argc == 9)
+    if (argc == 11)
     {
         if ((result = read_data_file(argv[1],
                                      plicdata,
@@ -928,6 +888,7 @@ static int init_library(_In_z_ const char *dllname,
 
     return ERR_NONE;
 #else
+    /* todo: implement */
     return TNOTIMPLEMENTED;
 #endif
 }
@@ -1079,6 +1040,7 @@ static int init_spv_library(_In_ const char *dllname,
         return ERR_BADLIB;
     }
 #else
+    /* todo: implement */
     return TNOTIMPLEMENTED;
 #endif
 
@@ -1194,6 +1156,7 @@ static int init_ssv_library(_In_z_ const char *dllname,
         return ERR_BADLIB;
     }
 #else
+    /* todo: implement */
     return TNOTIMPLEMENTED;
 #endif
 
@@ -4266,6 +4229,8 @@ static int test_spv_v301(_In_ const PTAGGANTCONTEXT context,
 }
 
 static int test_spv_v302(_In_z_ const char *jsonfilename,
+                         _In_z_ const char *certfilename,
+                         _In_z_ const char *certpwd,
                          _In_reads_(pefile_len) const UNSIGNED8 *pefile,
                          UNSIGNED64 pefile_len
                         )
@@ -4277,6 +4242,8 @@ static int test_spv_v302(_In_z_ const char *jsonfilename,
     result = create_tmp_v3_taggant("v3test02",
                                    jsonfilename,
                                    "v3test01",
+                                   certfilename,
+                                   certpwd,
                                    pefile,
                                    pefile_len
                                   );
@@ -4290,6 +4257,8 @@ static int test_spv_v302(_In_z_ const char *jsonfilename,
 }
 
 static int test_spv_v303(_In_z_ const char *jsonfilename,
+                         _In_z_ const char *certfilename,
+                         _In_z_ const char *certpwd,
                          _In_reads_(pefile_len) const UNSIGNED8 *pefile,
                          UNSIGNED64 pefile_len
                         )
@@ -4301,6 +4270,8 @@ static int test_spv_v303(_In_z_ const char *jsonfilename,
     result = create_tmp_v3_taggant("v3test03",
                                    jsonfilename,
                                    "v3test01",
+                                   certfilename,
+                                   certpwd,
                                    pefile,
                                    pefile_len
                                   );
@@ -4572,7 +4543,9 @@ static int test_spv_pe(_In_ const PTAGGANTCONTEXT context,
                        UNSIGNED64 v1file32_len,
                        UNSIGNED64 v1file64_len,
                        int use_default_file_size,
-                       _In_z_ const char *jsonfilename
+                       _In_z_ const char *jsonfilename,
+                       _In_z_ const char *certfilename,
+                       _In_z_ const char *certpwd
                       )
 {
     int result;
@@ -5239,12 +5212,16 @@ static int test_spv_pe(_In_ const PTAGGANTCONTEXT context,
          ) != ERR_NONE
         )
      || ((result = test_spv_v302(jsonfilename,
+                                 certfilename,
+                                 certpwd,
                                  pefile32,
                                  pefile32_len
                                 )
          ) != ERR_NONE
         )
      || ((result = test_spv_v303(jsonfilename,
+                                 certfilename,
+                                 certpwd,
                                  pefile64,
                                  pefile64_len
                                 )
@@ -10836,7 +10813,9 @@ int perform_tests(int argc, char *argv[], int use_default_object_size, int use_d
                                   v1file32_len,
                                   v1file64_len,
                                   use_default_file_size,
-                                  argv[7]
+                                  argv[7],
+                                  argv[9],
+                                  argv[10]
                                  )
             ) != ERR_NONE
            )

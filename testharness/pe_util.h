@@ -200,6 +200,10 @@ typedef struct _TAG_IMAGE_SECTION_HEADER {
 
 #pragma pack(pop)
 
+int authenticode_sign(_In_z_ const char *pefilename, 
+                      _In_z_ const char *certfilename,
+                      _In_z_ const char *certpwd
+                     );
 
 void fix_image_size(const UNSIGNED8 *pefile, UNSIGNED64 pefile_len,
                     UNSIGNED64 imagesize,

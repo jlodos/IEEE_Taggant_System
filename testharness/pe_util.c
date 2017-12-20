@@ -122,6 +122,467 @@
 
 #define IMAGE_DIRECTORY_ENTRY_SECURITY        4   // Security Directory
 
+#ifdef _WIN32
+
+#define HMODULE void*
+#define X509_ASN_ENCODING               0x00000001
+#define PKCS_7_ASN_ENCODING             0x00010000
+#define CERT_STORE_PROV_FILENAME_A      ((const char*) 7)
+#define CERT_STORE_OPEN_EXISTING_FLAG   0x00004000
+#define CERT_SYSTEM_STORE_CURRENT_USER  (1 << 16) /* (CERT_SYSTEM_STORE_CURRENT_USER_ID << CERT_SYSTEM_STORE_LOCATION_SHIFT) */
+#define CERT_FIND_EXT_ONLY_ENHKEY_USAGE_FLAG  0x2
+#define CERT_FIND_ENHKEY_USAGE  (10 << 16) /* CERT_COMPARE_ENHKEY_USAGE << CERT_COMPARE_SHIFT */
+#define szOID_PKIX_KP_CODE_SIGNING "1.3.6.1.5.5.7.3.3"
+
+#if defined(_WIN64)
+typedef unsigned __int64 ULONG_PTR, *PULONG_PTR;
+#else
+typedef _W64 unsigned long ULONG_PTR, *PULONG_PTR;
+#endif
+
+typedef UNSIGNED32 DWORD;
+typedef UNSIGNED8 BYTE;
+typedef long BOOL;
+typedef unsigned int ALG_ID;
+typedef const unsigned short* LPCWSTR;
+typedef unsigned short* LPWSTR;
+typedef char* LPSTR;
+typedef const char* LPCSTR;
+typedef void* HANDLE;
+typedef void *HCERTSTORE;
+typedef void *HWND;
+typedef ULONG_PTR HCRYPTPROV_LEGACY;
+
+typedef struct _SECURITY_ATTRIBUTES {
+    DWORD nLength;
+    void* lpSecurityDescriptor;
+    BOOL bInheritHandle;
+} SECURITY_ATTRIBUTES, *PSECURITY_ATTRIBUTES, *LPSECURITY_ATTRIBUTES;
+
+typedef struct _CRYPTOAPI_BLOB {
+    DWORD   cbData;
+    BYTE    *pbData;
+} CRYPT_INTEGER_BLOB, *PCRYPT_INTEGER_BLOB, CERT_NAME_BLOB, CRYPT_OBJID_BLOB, *PCRYPT_ATTR_BLOB, CRYPT_DATA_BLOB;
+
+typedef struct _CRYPT_ALGORITHM_IDENTIFIER {
+    LPSTR               pszObjId;
+    CRYPT_OBJID_BLOB    Parameters;
+} CRYPT_ALGORITHM_IDENTIFIER, *PCRYPT_ALGORITHM_IDENTIFIER;
+
+typedef struct _CRYPT_BIT_BLOB {
+    DWORD   cbData;
+    BYTE    *pbData;
+    DWORD   cUnusedBits;
+} CRYPT_BIT_BLOB, *PCRYPT_BIT_BLOB;
+
+typedef struct _CERT_PUBLIC_KEY_INFO {
+    CRYPT_ALGORITHM_IDENTIFIER    Algorithm;
+    CRYPT_BIT_BLOB                PublicKey;
+} CERT_PUBLIC_KEY_INFO, *PCERT_PUBLIC_KEY_INFO;
+
+typedef struct {
+    unsigned long  Data1;
+    unsigned short Data2;
+    unsigned short Data3;
+    BYTE           Data4[ 8 ];
+} GUID;
+
+typedef struct _FILETIME {
+    DWORD dwLowDateTime;
+    DWORD dwHighDateTime;
+} FILETIME, *PFILETIME, *LPFILETIME;
+
+typedef struct _CERT_EXTENSION {
+    LPSTR               pszObjId;
+    BOOL                fCritical;
+    CRYPT_OBJID_BLOB    Value;
+} CERT_EXTENSION, *PCERT_EXTENSION;
+
+typedef struct _CERT_INFO {
+    DWORD                       dwVersion;
+    CRYPT_INTEGER_BLOB          SerialNumber;
+    CRYPT_ALGORITHM_IDENTIFIER  SignatureAlgorithm;
+    CERT_NAME_BLOB              Issuer;
+    FILETIME                    NotBefore;
+    FILETIME                    NotAfter;
+    CERT_NAME_BLOB              Subject;
+    CERT_PUBLIC_KEY_INFO        SubjectPublicKeyInfo;
+    CRYPT_BIT_BLOB              IssuerUniqueId;
+    CRYPT_BIT_BLOB              SubjectUniqueId;
+    DWORD                       cExtension;
+    PCERT_EXTENSION             rgExtension;
+} CERT_INFO, *PCERT_INFO;
+
+typedef struct _CERT_CONTEXT {
+    DWORD                   dwCertEncodingType;
+    BYTE                    *pbCertEncoded;
+    DWORD                   cbCertEncoded;
+    PCERT_INFO              pCertInfo;
+    HCERTSTORE              hCertStore;
+} CERT_CONTEXT, *PCERT_CONTEXT;
+
+typedef const CERT_CONTEXT *PCCERT_CONTEXT;
+
+typedef struct _SIGNER_FILE_INFO {
+    DWORD cbSize;
+    LPCWSTR pwszFileName;
+    HANDLE hFile;
+} SIGNER_FILE_INFO, *PSIGNER_FILE_INFO;
+
+typedef struct _SIGNER_BLOB_INFO {
+    DWORD cbSize;
+    GUID *pGuidSubject;
+    DWORD cbBlob;
+    BYTE *pbBlob;
+    LPCWSTR pwszDisplayName;
+} SIGNER_BLOB_INFO, *PSIGNER_BLOB_INFO;
+
+typedef struct _SIGNER_CERT_STORE_INFO {
+    DWORD cbSize;
+    PCCERT_CONTEXT pSigningCert;
+    DWORD dwCertPolicy;
+    HCERTSTORE hCertStore;
+} SIGNER_CERT_STORE_INFO, *PSIGNER_CERT_STORE_INFO;
+
+typedef struct _SIGNER_SPC_CHAIN_INFO {
+    DWORD cbSize;
+    LPCWSTR pwszSpcFile;
+    DWORD dwCertPolicy;
+    HCERTSTORE hCertStore;
+} SIGNER_SPC_CHAIN_INFO, *PSIGNER_SPC_CHAIN_INFO;
+
+typedef struct _SIGNER_ATTR_AUTHCODE {
+    DWORD cbSize;
+    BOOL fCommercial;
+    BOOL fIndividual;
+    LPCWSTR pwszName;
+    LPCWSTR pwszInfo;
+} SIGNER_ATTR_AUTHCODE, *PSIGNER_ATTR_AUTHCODE;
+
+typedef struct _CRYPT_ATTRIBUTE {
+    LPSTR               pszObjId;
+    DWORD               cValue;
+    PCRYPT_ATTR_BLOB    rgValue;
+} CRYPT_ATTRIBUTE, *PCRYPT_ATTRIBUTE;
+
+typedef struct _CRYPT_ATTRIBUTES {
+    DWORD                cAttr;
+    PCRYPT_ATTRIBUTE     rgAttr;
+} CRYPT_ATTRIBUTES, *PCRYPT_ATTRIBUTES;
+
+typedef struct _CTL_USAGE {
+    DWORD               cUsageIdentifier;
+    LPSTR               *rgpszUsageIdentifier;      // array of pszObjId
+} CTL_USAGE, *PCTL_USAGE, CERT_ENHKEY_USAGE, *PCERT_ENHKEY_USAGE;
+
+#pragma warning (disable : 4201)
+
+typedef struct _SIGNER_SUBJECT_INFO {
+    DWORD cbSize;
+    DWORD *pdwIndex;
+    DWORD dwSubjectChoice;
+    union {
+        SIGNER_FILE_INFO *pSignerFileInfo;
+        SIGNER_BLOB_INFO *pSignerBlobInfo;
+    };
+} SIGNER_SUBJECT_INFO, *PSIGNER_SUBJECT_INFO;
+
+typedef struct _SIGNER_CERT {
+    DWORD cbSize;
+    DWORD dwCertChoice;
+    union {
+        LPCWSTR pwszSpcFile;
+        SIGNER_CERT_STORE_INFO *pCertStoreInfo;
+        SIGNER_SPC_CHAIN_INFO *pSpcChainInfo;
+    };
+    HWND hwnd;
+} SIGNER_CERT, *PSIGNER_CERT;
+
+typedef struct _SIGNER_SIGNATURE_INFO {
+    DWORD cbSize;
+    ALG_ID algidHash;
+    DWORD dwAttrChoice;
+    union {
+        SIGNER_ATTR_AUTHCODE *pAttrAuthcode;
+    };
+    PCRYPT_ATTRIBUTES psAuthenticated;
+    PCRYPT_ATTRIBUTES psUnauthenticated;
+} SIGNER_SIGNATURE_INFO, *PSIGNER_SIGNATURE_INFO;
+
+typedef struct _SIGNER_PROVIDER_INFO {
+    DWORD cbSize;
+    LPCWSTR pwszProviderName;
+    DWORD dwProviderType;
+    DWORD dwKeySpec;
+    DWORD dwPvkChoice;
+    union {
+        LPWSTR pwszPvkFileName;
+        LPWSTR pwszKeyContainer;
+    };
+} SIGNER_PROVIDER_INFO, *PSIGNER_PROVIDER_INFO;
+
+typedef struct _OVERLAPPED {
+    ULONG_PTR Internal;
+    ULONG_PTR InternalHigh;
+    union {
+        struct {
+            DWORD Offset;
+            DWORD OffsetHigh;
+        } DUMMYSTRUCTNAME;
+        PVOID Pointer;
+    } DUMMYUNIONNAME;
+
+    HANDLE  hEvent;
+} OVERLAPPED, *LPOVERLAPPED;
+
+#pragma warning (default : 4201)
+
+typedef struct _SIGNER_CONTEXT {
+    DWORD cbSize;
+    DWORD cbBlob;
+    BYTE *pbBlob;
+} SIGNER_CONTEXT, *PSIGNER_CONTEXT;
+
+typedef struct _BY_HANDLE_FILE_INFORMATION {
+    DWORD dwFileAttributes;
+    FILETIME ftCreationTime;
+    FILETIME ftLastAccessTime;
+    FILETIME ftLastWriteTime;
+    DWORD dwVolumeSerialNumber;
+    DWORD nFileSizeHigh;
+    DWORD nFileSizeLow;
+    DWORD nNumberOfLinks;
+    DWORD nFileIndexHigh;
+    DWORD nFileIndexLow;
+} BY_HANDLE_FILE_INFORMATION, *PBY_HANDLE_FILE_INFORMATION, *LPBY_HANDLE_FILE_INFORMATION;
+
+typedef UNSIGNED32 HRESULT;
+
+typedef HRESULT(__stdcall* SignerFreeSignerContextType)(
+    __in  SIGNER_CONTEXT *pSignerContext
+    );
+
+typedef HRESULT(__stdcall *SignerSignExType)(
+    __in      DWORD dwFlags,
+    __in      SIGNER_SUBJECT_INFO *pSubjectInfo,
+    __in      SIGNER_CERT *pSignerCert,
+    __in      SIGNER_SIGNATURE_INFO *pSignatureInfo,
+    __in_opt  SIGNER_PROVIDER_INFO *pProviderInfo,
+    __in_opt  LPCWSTR pwszHttpTimeStamp,
+    __in_opt  PCRYPT_ATTRIBUTES psRequest,
+    __in_opt  void* pSipData,
+    __out     SIGNER_CONTEXT **ppSignerContext
+    );
+
+typedef int(__stdcall *FARPROC)();
+
+__declspec(dllimport) FARPROC __stdcall GetProcAddress(_In_ HMODULE hModule, _In_ const char* lpProcName);
+
+__declspec(dllimport) HMODULE __stdcall LoadLibraryA(_In_ const char* lpLibFileName);
+
+__declspec(dllimport) int __stdcall FreeLibrary(_In_ HMODULE hLibModule);
+
+__declspec(dllimport) HANDLE __stdcall CreateFileA(
+    _In_ LPCSTR lpFileName,
+    _In_ DWORD dwDesiredAccess,
+    _In_ DWORD dwShareMode,
+    _In_opt_ LPSECURITY_ATTRIBUTES lpSecurityAttributes,
+    _In_ DWORD dwCreationDisposition,
+    _In_ DWORD dwFlagsAndAttributes,
+    _In_opt_ HANDLE hTemplateFile
+    );
+
+__declspec(dllimport) BOOL __stdcall CloseHandle(__in HANDLE hObject);
+
+__declspec(dllimport) HCERTSTORE __stdcall CertOpenStore(
+    _In_ LPCSTR lpszStoreProvider,
+    _In_ DWORD dwEncodingType,
+    _In_opt_ HCRYPTPROV_LEGACY hCryptProv,
+    _In_ DWORD dwFlags,
+    _In_opt_ const void *pvPara
+    );
+
+__declspec(dllimport) BOOL __stdcall CertCloseStore(_In_opt_ HCERTSTORE hCertStore, _In_ DWORD dwFlags);
+
+__declspec(dllimport) PCCERT_CONTEXT __stdcall CertFindCertificateInStore(
+    _In_ HCERTSTORE hCertStore,
+    _In_ DWORD dwCertEncodingType,
+    _In_ DWORD dwFindFlags,
+    _In_ DWORD dwFindType,
+    _In_opt_ const void *pvFindPara,
+    _In_opt_ PCCERT_CONTEXT pPrevCertContext
+    );
+
+__declspec(dllimport) BOOL __stdcall CertFreeCertificateContext(_In_opt_ PCCERT_CONTEXT pCertContext);
+
+__declspec(dllimport) BOOL __stdcall GetFileInformationByHandle(_In_ HANDLE hFile, _Out_ LPBY_HANDLE_FILE_INFORMATION lpFileInformation);
+
+__declspec(dllimport) BOOL __stdcall ReadFile(
+    _In_ HANDLE hFile,
+    _Out_ void* lpBuffer,
+    _In_ DWORD nNumberOfBytesToRead,
+    _Out_opt_ DWORD* lpNumberOfBytesRead,
+    _Inout_opt_ LPOVERLAPPED lpOverlapped
+    );
+
+__declspec(dllimport) BOOL __stdcall PFXIsPFXBlob(_In_ CRYPT_DATA_BLOB* pPFX);
+
+__declspec(dllimport) HCERTSTORE __stdcall PFXImportCertStore(
+    _In_ CRYPT_DATA_BLOB* pPFX,
+    _In_ LPCWSTR szPassword,
+    _In_ DWORD   dwFlags);
+
+#endif
+
+int authenticode_sign(_In_z_ const char *pefilename, 
+                      _In_z_ const char *certfilename,
+                      _In_z_ const char *certpwd
+					  )
+{
+    int result = 0;
+
+#ifdef _WIN32
+    HMODULE hMssign32;
+    SignerSignExType pfSignerSignEx;
+    SignerFreeSignerContextType pfSignerFreeSignerContext;
+    HANDLE hPEFile, hCertFile;
+    HCERTSTORE hCertStore = NULL;
+    PCCERT_CONTEXT pCertContext;
+    DWORD dwIndex, dwRead;
+    SIGNER_FILE_INFO signerFileInfo;
+    SIGNER_SUBJECT_INFO signerSubjectInfo;
+    SIGNER_CERT_STORE_INFO signerCertStoreInfo;
+    SIGNER_CERT signerCert;
+    SIGNER_SIGNATURE_INFO signerSignatureInfo;
+    SIGNER_CONTEXT * pSignerContext;
+	BY_HANDLE_FILE_INFORMATION fi;
+    BYTE* pbBuffer;
+    CRYPT_DATA_BLOB pfxBlob;
+	unsigned short pwd[256] = { 0 };
+    size_t pwdlen = 0;
+    unsigned short filename[260] = { 0 };
+    size_t filenamelen = 0;
+    CERT_ENHKEY_USAGE keyUsage;
+    char szCodeSigningOID[] = szOID_PKIX_KP_CODE_SIGNING;
+
+    /* initialize WCHAR variables */
+    if (certpwd)
+    {
+        while (certpwd[pwdlen] && pwdlen < sizeof(pwd) / sizeof(unsigned short))
+        {
+            pwd[pwdlen] = certpwd[pwdlen];
+            pwdlen++;
+        }
+    }
+    if (pefilename)
+    {
+        while (pefilename[filenamelen] && filenamelen < sizeof(filename) / sizeof(unsigned short))
+        {
+            filename[filenamelen] = pefilename[filenamelen];
+            filenamelen++;
+        }
+    }
+
+    /* import .pfx or .p12 */
+    hCertFile = CreateFileA(certfilename, 0x80000000L/*GENERIC_READ*/, 1/*FILE_SHARE_READ*/, NULL, 3/*OPEN_EXISTING*/, 0, NULL);
+    if (hCertFile != (HANDLE)-1)
+    {
+        if (GetFileInformationByHandle(hCertFile, &fi))
+        {
+            // make buffer for cert data
+            pbBuffer = (BYTE*)malloc(fi.nFileSizeLow);
+            if (pbBuffer)
+            {
+                if (ReadFile(hCertFile, pbBuffer, fi.nFileSizeLow, &dwRead, NULL))
+                {
+                    pfxBlob.cbData = fi.nFileSizeLow;
+                    pfxBlob.pbData = pbBuffer;
+                    if (PFXIsPFXBlob(&pfxBlob))
+                    {
+                        hCertStore = PFXImportCertStore(&pfxBlob, pwd, 0x00001000 | 0x00008000); /* CRYPT_USER_KEYSET | PKCS12_NO_PERSIST_KEY */
+                    }
+                }
+                free(pbBuffer);
+            }
+        }
+        CloseHandle(hCertFile);
+	}
+    if (!hCertStore)
+    {
+        return 0;
+    }
+
+	/* sign */
+    hMssign32 = LoadLibraryA("Mssign32.dll");
+    if (hMssign32)
+    {
+        pfSignerSignEx = (SignerSignExType)GetProcAddress(hMssign32, "SignerSignEx");
+        if (pfSignerSignEx)
+        {
+            pfSignerFreeSignerContext = (SignerFreeSignerContextType)GetProcAddress(hMssign32, "SignerFreeSignerContext");
+            if (pfSignerFreeSignerContext)
+            {
+                hPEFile = CreateFileA(pefilename, 0x80000000L | 0x40000000L/*GENERIC_READ | GENERIC_WRITE*/, 0, NULL, 3/*OPEN_EXISTING*/, 0x80/*FILE_ATTRIBUTE_NORMAL*/, NULL);
+                if (hPEFile)
+                {
+                    keyUsage.cUsageIdentifier = 1;
+                    keyUsage.rgpszUsageIdentifier = (LPSTR*)malloc(sizeof(LPSTR));
+                    if (keyUsage.rgpszUsageIdentifier)
+                    {
+                        keyUsage.rgpszUsageIdentifier[0] = &szCodeSigningOID[0];
+                        pCertContext = CertFindCertificateInStore(hCertStore, X509_ASN_ENCODING | PKCS_7_ASN_ENCODING, CERT_FIND_EXT_ONLY_ENHKEY_USAGE_FLAG, CERT_FIND_ENHKEY_USAGE, &keyUsage, NULL);
+                        if (pCertContext)
+                        {
+                            signerFileInfo.cbSize = sizeof(SIGNER_FILE_INFO);
+                            signerFileInfo.pwszFileName = filename;
+                            signerFileInfo.hFile = hPEFile;
+
+                            signerSubjectInfo.cbSize = sizeof(SIGNER_SUBJECT_INFO);
+                            dwIndex = 0;
+                            signerSubjectInfo.pdwIndex = &dwIndex;
+                            signerSubjectInfo.dwSubjectChoice = 1;
+                            signerSubjectInfo.pSignerFileInfo = &signerFileInfo;
+
+                            signerCertStoreInfo.cbSize = sizeof(SIGNER_CERT_STORE_INFO);
+                            signerCertStoreInfo.pSigningCert = pCertContext;
+                            signerCertStoreInfo.dwCertPolicy = 2; /* SIGNER_CERT_POLICY_CHAIN */
+                            signerCertStoreInfo.hCertStore = NULL;
+
+                            signerCert.cbSize = sizeof(SIGNER_CERT);
+                            signerCert.dwCertChoice = 2; /* SIGNER_CERT_STORE */
+                            signerCert.pCertStoreInfo = &signerCertStoreInfo;
+                            signerCert.hwnd = NULL;
+
+                            signerSignatureInfo.cbSize = sizeof(SIGNER_SIGNATURE_INFO);
+                            signerSignatureInfo.algidHash = ((4 << 13) | (0) | 4); /* CALG_SHA1 => (ALG_CLASS_HASH | ALG_TYPE_ANY | ALG_SID_SHA1) */
+                            signerSignatureInfo.dwAttrChoice = 0; /* SIGNER_NO_ATTR */
+                            signerSignatureInfo.pAttrAuthcode = NULL;
+                            signerSignatureInfo.psAuthenticated = NULL;
+                            signerSignatureInfo.psUnauthenticated = NULL;
+
+                            if (0 == pfSignerSignEx(0, &signerSubjectInfo, &signerCert, &signerSignatureInfo, NULL, NULL, NULL, NULL, &pSignerContext))
+                            {
+                                pfSignerFreeSignerContext(pSignerContext);
+                                result = 1;
+                            }
+                            CertFreeCertificateContext(pCertContext);
+                        }
+                        free(keyUsage.rgpszUsageIdentifier);
+                    }
+                    CloseHandle(hPEFile);
+                }
+            }
+        }
+        FreeLibrary(hMssign32);
+    }
+    CertCloseStore(hCertStore, 0x00000002); /* CERT_CLOSE_STORE_CHECK_FLAG */
+#else
+    /* todo: implement */
+#endif
+
+    return result;
+}
+
 void fix_image_size(const UNSIGNED8 *pefile, UNSIGNED64 pefile_len,
                     UNSIGNED64 imagesize,
                     _Out_writes_(1) UNSIGNED64 *fixedimagesize
